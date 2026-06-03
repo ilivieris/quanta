@@ -91,7 +91,9 @@ def test_add_rolls_back_on_turbovec_failure(turbo_index, sample_vectors, sample_
 
 def _set_search_return(idx, inner, ids: list[str], scores: list[float]):
     u64s = np.array([idx._str_to_u64[sid] for sid in ids], dtype=np.uint64)
-    result = (u64s, np.array(scores, dtype=np.float32))
+    scores_arr = np.array(scores, dtype=np.float32)
+    # turbovec returns (scores, ids) each shape (1, k)
+    result = (scores_arr[np.newaxis], u64s[np.newaxis])
     inner.search.return_value = result
     inner.search_with_allowlist.return_value = result
 
@@ -149,8 +151,8 @@ def test_search_skips_unknown_u64(turbo_index, sample_vectors, sample_ids):
     # Return one valid id and one unknown u64
     known_u64 = idx._str_to_u64[sample_ids[0]]
     inner.search.return_value = (
-        np.array([known_u64, 99999999999], dtype=np.uint64),
-        np.array([0.9, 0.8], dtype=np.float32),
+        np.array([[0.9, 0.8]], dtype=np.float32),
+        np.array([[known_u64, 99999999999]], dtype=np.uint64),
     )
     results = idx.search(sample_vectors[0], k=2)
     assert len(results) == 1

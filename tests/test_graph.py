@@ -158,7 +158,10 @@ def test_neo4j_hops_validation_raises(neo4j_mock):
 def test_get_graph_backend_returns_null_when_unconfigured():
     from turborag.config import TurboRAGSettings
 
-    settings = TurboRAGSettings(POSTGRES_USER="u", POSTGRES_PASSWORD="p")
+    settings = TurboRAGSettings(
+        POSTGRES_USER="u", POSTGRES_PASSWORD="p",
+        NEO4J_URI=None, NEO4J_USER=None, NEO4J_PASSWORD=None,
+    )
     backend = get_graph_backend(settings)
     assert isinstance(backend, NullGraph)
 

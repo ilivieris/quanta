@@ -25,6 +25,10 @@ class TurboRAGSettings(BaseSettings):
     NEO4J_PASSWORD: str | None = None
     NEO4J_DATABASE: str = "neo4j"
 
+    # ── Embedding ─────────────────────────────────────────────────────────────
+    EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    EMBED_DIM: int = 768
+
     # ── Index defaults ────────────────────────────────────────────────────────
     DEFAULT_BIT_WIDTH: int = 4
     DEFAULT_TOP_K: int = 10
@@ -40,3 +44,7 @@ class TurboRAGSettings(BaseSettings):
     @property
     def graph_configured(self) -> bool:
         return bool(self.NEO4J_URI and self.NEO4J_USER and self.NEO4J_PASSWORD)
+
+
+def get_settings() -> TurboRAGSettings:
+    return TurboRAGSettings()

@@ -88,6 +88,12 @@ class TurboRAGVectorStore:
             document_id = node.ref_doc_id or chunk_id
             chunk_index: int = node.metadata.get("chunk_index", 0)
 
+            await self._retriever.docstore.add_document(
+                id=document_id,
+                content=node.get_content(),
+                doc_type=node.metadata.get("doc_type", "text"),
+                metadata=node.metadata,
+            )
             await self._retriever.docstore.add_chunk(
                 id=chunk_id,
                 document_id=document_id,

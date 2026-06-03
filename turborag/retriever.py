@@ -41,7 +41,7 @@ class HybridRetriever:
         self,
         indexes: dict[str, TurboIndex],
         docstore: DocStore,
-        graph: GraphBackend,
+        graph: GraphBackend | None = None,
         dense_weight: float = 0.7,
         graph_weight: float = 0.3,
         config: TurboRAGSettings | None = None,
@@ -55,7 +55,7 @@ class HybridRetriever:
 
         self._indexes = indexes
         self._docstore = docstore
-        self._graph = graph
+        self._graph = graph if graph is not None else NullGraph()
         self._dense_weight = dense_weight
         self._graph_weight = graph_weight
         self._config = config

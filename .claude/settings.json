@@ -4,7 +4,20 @@
       "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -m pip list)",
       "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -m pip install pytest pytest-asyncio --quiet)",
       "Bash(python3 -c ' *)",
-      "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -c ' *)"
+      "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -c ' *)",
+      "Bash(.venv/Scripts/pytest tests/test_graph.py::test_get_graph_backend_returns_null_when_unconfigured -v)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import turbovec; help\\(turbovec.IdMapIndex.search\\)\")",
+      "Bash(Test-Path \"C:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\\\\kiko2.py\")",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\('kiko.py'\\).read\\(\\)\\); ast.parse\\(open\\('kiko2.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('kiko.py'\\).read\\(\\)\\); ast.parse\\(open\\('kiko2.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(py -c \"import ast; ast.parse\\(open\\('kiko.py'\\).read\\(\\)\\); ast.parse\\(open\\('kiko2.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(py -c \"import ast; ast.parse\\(open\\('kiko.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('kiko2.py', encoding='utf-8'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import turbovec; idx = turbovec.IdMapIndex\\(4, 4\\); print\\([m for m in dir\\(idx\\) if not m.startswith\\('_'\\)]\\)\")",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import turbovec; idx = turbovec.IdMapIndex\\(4, 4\\); print\\([m for m in dir\\(idx\\) if not m.startswith\\('_'\\)]\\)\")",
+      "PowerShell(cd \"C:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\"; $env:PYTHONIOENCODING = \"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe .\\\\kiko.py 2>&1 | Select-String -Pattern \"Q7|save|load|Error|Traceback\" | Select-Object -First 20)",
+      "Bash(python -m pytest tests/test_index.py -v --tb=short)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import turbovec; idx = turbovec.IdMapIndex\\(dim=4, bit_width=4\\); print\\([m for m in dir\\(idx\\) if not m.startswith\\('__'\\)]\\)\")",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; cd \"C:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\"; .\\\\.venv\\\\Scripts\\\\python.exe .\\\\examples\\\\turbovec_allowlist_search_demo.py)"
     ]
   }
 }

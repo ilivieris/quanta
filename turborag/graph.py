@@ -167,12 +167,16 @@ class Neo4jGraph(GraphBackend):
         matches that type are returned.
         """
         _validate_hops(hops)
+        # Bind a path variable so length() and last(relationships()) work correctly.
+        # r*1..n binds r as a list of relationships — length(r) would fail there.
         query = f"""
             MATCH (start:Document {{id: $id}})
-            MATCH (start)-[r*1..{hops}]-(neighbor:Document)
-            WHERE ($rel_type IS NULL OR type(r[-1]) = $rel_type)
-            RETURN DISTINCT neighbor.id AS id, neighbor.title AS title,
-                   type(r[-1]) AS relation, min(length(r)) AS distance
+            MATCH path = (start)-[*1..{hops}]-(neighbor:Document)
+            WHERE ($rel_type IS NULL OR type(last(relationships(path))) = $rel_type)
+            WITH neighbor.id AS id, neighbor.title AS title,
+                 type(last(relationships(path))) AS relation,
+                 min(length(path)) AS distance
+            RETURN id, title, relation, distance
             ORDER BY distance
         """
         rows = self._run(query, id=start_id, rel_type=relation_type)

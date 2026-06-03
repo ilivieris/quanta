@@ -194,7 +194,7 @@ class TurboIndex:
             List of :class:`SearchResult` sorted by descending score.
             ``metadata`` is left empty here; the retriever layer populates it.
         """
-        query = np.asarray(query, dtype=np.float32)
+        query = np.ascontiguousarray(query, dtype=np.float32)
         if query.ndim == 2:
             if query.shape[0] != 1:
                 raise TurboRAGError(
@@ -207,14 +207,21 @@ class TurboIndex:
             )
 
         try:
+            queries = query[np.newaxis]  # (1, dim) — turbovec requires 2-D batch
             if allowed_ids is not None:
-                allowlist = np.array(
-                    [self._str_to_u64[sid] for sid in allowed_ids if sid in self._str_to_u64],
-                    dtype=np.uint64,
-                )
-                raw = self._index.search_with_allowlist(query, k=k, allowlist=allowlist)
+                u64_allowlist = [
+                    self._str_to_u64[sid] for sid in allowed_ids if sid in self._str_to_u64
+                ]
+                if not u64_allowlist:
+                    return []
+                allowlist = np.array(u64_allowlist, dtype=np.uint64)
+                scores_batch, ids_batch = self._index.search(queries, k=k, allowlist=allowlist)
             else:
-                raw = self._index.search(query, k=k)
+                scores_batch, ids_batch = self._index.search(queries, k=k)
+            # turbovec returns (scores, ids) each shape (1, k); unpack the single row
+            raw = list(zip(ids_batch[0].tolist(), scores_batch[0].tolist()))
+        except TurboRAGError:
+            raise
         except Exception as exc:
             raise TurboRAGError(f"TurboIndex.search failed: {exc}") from exc
 
@@ -240,7 +247,7 @@ class TurboIndex:
         self._index_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            self._index.save(str(self._tvim_path))
+            self._index.write(str(self._tvim_path))
         except Exception as exc:
             raise TurboRAGError(
                 f"TurboIndex.save failed writing {self._tvim_path}: {exc}"
