@@ -1,4 +1,4 @@
-"""Tests for turbosearch.docstore.DocStore.
+"""Tests for turborag.docstore.DocStore.
 
 asyncpg is mocked at the pool level — no PostgreSQL instance required.
 """
@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from turbosearch.exceptions import TurboSearchError
-from turbosearch.types import ChunkRecord
+from turborag.exceptions import TurboRAGError
+from turborag.types import ChunkRecord
 
 
 # ── asyncpg pool / connection mock helpers ────────────────────────────────────
@@ -32,13 +32,13 @@ def mock_conn():
     txn = MagicMock()
     txn.__aenter__ = AsyncMock(return_value=None)
     txn.__aexit__ = AsyncMock(return_value=False)
-    conn.transaction.return_value = txn
+    conn.transaction = MagicMock(return_value=txn)
     return conn
 
 
 @pytest.fixture
 def mock_pool(mock_conn):
-    pool = AsyncMock()
+    pool = MagicMock()
     pool.close = AsyncMock()
 
     acq = MagicMock()
@@ -51,10 +51,10 @@ def mock_pool(mock_conn):
 @pytest.fixture
 def docstore(mock_pool):
     """DocStore with pool injected, bypassing real init()."""
-    from turbosearch.config import TurboSearchSettings
-    from turbosearch.docstore import DocStore
+    from turborag.config import TurboRAGSettings
+    from turborag.docstore import DocStore
 
-    settings = TurboSearchSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
+    settings = TurboRAGSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
     ds = DocStore(settings)
     ds._pool = mock_pool
     return ds
@@ -63,13 +63,13 @@ def docstore(mock_pool):
 # ── init ──────────────────────────────────────────────────────────────────────
 
 async def test_init_creates_pool_and_tables(mock_pool):
-    from turbosearch.config import TurboSearchSettings
-    from turbosearch.docstore import DocStore
+    from turborag.config import TurboRAGSettings
+    from turborag.docstore import DocStore
 
-    settings = TurboSearchSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
+    settings = TurboRAGSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
     ds = DocStore(settings)
 
-    with patch("turbosearch.docstore.asyncpg.create_pool", AsyncMock(return_value=mock_pool)):
+    with patch("turborag.docstore.asyncpg.create_pool", AsyncMock(return_value=mock_pool)):
         await ds.init()
 
     assert ds._pool is mock_pool
@@ -89,7 +89,7 @@ async def test_add_document_wraps_postgres_error(docstore, mock_conn):
     import asyncpg
 
     mock_conn.execute.side_effect = asyncpg.PostgresError("boom")
-    with pytest.raises(TurboSearchError, match="add_document"):
+    with pytest.raises(TurboRAGError, match="add_document"):
         await docstore.add_document("id-1", "text", "text")
 
 

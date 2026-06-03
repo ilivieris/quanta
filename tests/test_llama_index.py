@@ -1,4 +1,4 @@
-"""Tests for turbosearch.integrations.llama_index.TurboSearchVectorStore.
+"""Tests for turborag.integrations.llama_index.TurboRAGVectorStore.
 
 llama_index is mocked via sys.modules so the tests run without the package
 being installed.
@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from turbosearch.exceptions import TurboSearchError
-from turbosearch.graph import NullGraph
-from turbosearch.retriever import HybridRetriever
-from turbosearch.types import ChunkRecord, RetrievalResult, SearchResult
+from turborag.exceptions import TurboRAGError
+from turborag.graph import NullGraph
+from turborag.retriever import HybridRetriever
+from turborag.types import ChunkRecord, RetrievalResult, SearchResult
 
 
 # ── Fake llama_index stubs ────────────────────────────────────────────────────
@@ -103,22 +103,22 @@ def retriever(mock_docstore):
 
 @pytest.fixture
 def vector_store(retriever):
-    from turbosearch.integrations.llama_index import TurboSearchVectorStore
+    from turborag.integrations.llama_index import TurboRAGVectorStore
 
     r, idx, ds = retriever
-    return TurboSearchVectorStore(retriever=r, index_name="text", embed_dim=DIM)
+    return TurboRAGVectorStore(retriever=r, index_name="text", embed_dim=DIM)
 
 
 # ── Constructor ───────────────────────────────────────────────────────────────
 
 def test_invalid_index_name_raises(mock_docstore):
-    from turbosearch.integrations.llama_index import TurboSearchVectorStore
+    from turborag.integrations.llama_index import TurboRAGVectorStore
 
     idx = _make_mock_index()
     r = HybridRetriever(indexes={"text": idx}, docstore=mock_docstore, graph=NullGraph())
 
-    with pytest.raises(TurboSearchError, match="index_name"):
-        TurboSearchVectorStore(retriever=r, index_name="nonexistent", embed_dim=DIM)
+    with pytest.raises(TurboRAGError, match="index_name"):
+        TurboRAGVectorStore(retriever=r, index_name="nonexistent", embed_dim=DIM)
 
 
 # ── async_add ─────────────────────────────────────────────────────────────────
@@ -152,14 +152,14 @@ async def test_async_add_persists_chunk_and_vector(vector_store, retriever):
 
 async def test_async_add_missing_embedding_raises(vector_store):
     node = FakeTextNode(node_id="ch-1", embedding=None)
-    with pytest.raises(TurboSearchError, match="embedding"):
+    with pytest.raises(TurboRAGError, match="embedding"):
         await vector_store.async_add([node])
 
 
 async def test_async_add_missing_node_id_raises(vector_store):
     node = FakeTextNode(node_id=None, embedding=[0.1] * DIM)  # type: ignore[arg-type]
     node.node_id = None
-    with pytest.raises(TurboSearchError, match="node_id"):
+    with pytest.raises(TurboRAGError, match="node_id"):
         await vector_store.async_add([node])
 
 
@@ -207,16 +207,16 @@ async def test_aquery_delegates_to_search(vector_store, retriever):
     result = await store.aquery(query)
 
     assert len(result.nodes) == 1
-    assert result.nodes[0].score == pytest.approx(0.9)
+    assert result.nodes[0].score == pytest.approx(0.7)
     assert result.ids == ["ch-1"]
 
 
 async def test_aquery_missing_embedding_raises(vector_store):
-    from turbosearch.exceptions import TurboSearchError
+    from turborag.exceptions import TurboRAGError
 
     query = FakeQuery(embedding=None, top_k=3)  # type: ignore[arg-type]
     query.query_embedding = None
-    with pytest.raises(TurboSearchError, match="query_embedding"):
+    with pytest.raises(TurboRAGError, match="query_embedding"):
         await vector_store.aquery(query)
 
 

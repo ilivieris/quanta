@@ -1,4 +1,4 @@
-"""Tests for turbosearch.retriever.HybridRetriever."""
+"""Tests for turborag.retriever.HybridRetriever."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from turbosearch.exceptions import TurboSearchError
-from turbosearch.graph import NullGraph
-from turbosearch.retriever import HybridRetriever, _normalize
-from turbosearch.types import ChunkRecord, GraphNode, RetrievalResult, SearchResult
+from turborag.exceptions import TurboRAGError
+from turborag.graph import NullGraph
+from turborag.retriever import HybridRetriever, _normalize
+from turborag.types import ChunkRecord, GraphNode, RetrievalResult, SearchResult
 
 DIM = 64  # small dim for test speed
 
@@ -74,13 +74,13 @@ def simple_retriever(mock_docstore, null_graph):
 # ── Constructor validation ────────────────────────────────────────────────────
 
 def test_empty_indexes_raises(mock_docstore, null_graph):
-    with pytest.raises(TurboSearchError, match="at least one"):
+    with pytest.raises(TurboRAGError, match="at least one"):
         HybridRetriever(indexes={}, docstore=mock_docstore, graph=null_graph)
 
 
 def test_bad_dense_weight_raises(mock_docstore, null_graph):
     idx = _make_index([])
-    with pytest.raises(TurboSearchError, match="dense_weight"):
+    with pytest.raises(TurboRAGError, match="dense_weight"):
         HybridRetriever(
             indexes={"t": idx}, docstore=mock_docstore, graph=null_graph,
             dense_weight=1.5
@@ -89,7 +89,7 @@ def test_bad_dense_weight_raises(mock_docstore, null_graph):
 
 def test_bad_graph_weight_raises(mock_docstore, null_graph):
     idx = _make_index([])
-    with pytest.raises(TurboSearchError, match="graph_weight"):
+    with pytest.raises(TurboRAGError, match="graph_weight"):
         HybridRetriever(
             indexes={"t": idx}, docstore=mock_docstore, graph=null_graph,
             graph_weight=-0.1
@@ -124,7 +124,7 @@ async def test_search_source_is_dense_without_graph(simple_retriever, query_vec)
 async def test_search_unknown_index_name_raises(mock_docstore, null_graph, query_vec):
     idx = _make_index([])
     retriever = HybridRetriever(indexes={"text": idx}, docstore=mock_docstore, graph=null_graph)
-    with pytest.raises(TurboSearchError, match="No index registered"):
+    with pytest.raises(TurboRAGError, match="No index registered"):
         await retriever.search({"images": query_vec})
 
 
@@ -133,7 +133,7 @@ async def test_search_missing_query_vector_raises(mock_docstore, null_graph, que
     retriever = HybridRetriever(
         indexes={"text": idx, "images": idx}, docstore=mock_docstore, graph=null_graph
     )
-    with pytest.raises(TurboSearchError, match="No query vector"):
+    with pytest.raises(TurboRAGError, match="No query vector"):
         await retriever.search({"text": query_vec}, index_names=["text", "images"])
 
 
@@ -262,7 +262,7 @@ async def test_filters_no_chunks_returns_empty(mock_docstore, null_graph, query_
 
 async def test_filters_allowed_ids_passed_to_index(mock_docstore, null_graph, query_vec):
     idx = _make_index([SearchResult(id="ch-1", score=0.9)])
-    from turbosearch.types import ChunkRecord
+    from turborag.types import ChunkRecord
 
     mock_docstore.filter_chunks = AsyncMock(
         return_value=[ChunkRecord(id="ch-1", document_id="d", content="c", chunk_index=0)]

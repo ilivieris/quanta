@@ -4,13 +4,13 @@ from typing import Any
 
 import numpy as np
 
-from turbosearch.config import TurboSearchSettings
-from turbosearch.docstore import DocStore
-from turbosearch.exceptions import TurboSearchError
-from turbosearch.graph import GraphBackend, NullGraph
-from turbosearch.index import TurboIndex
-from turbosearch.types import GraphNode, RetrievalResult
-from turbosearch.utils.logging import get_logger
+from turborag.config import TurboRAGSettings
+from turborag.docstore import DocStore
+from turborag.exceptions import TurboRAGError
+from turborag.graph import GraphBackend, NullGraph
+from turborag.index import TurboIndex
+from turborag.types import GraphNode, RetrievalResult
+from turborag.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -44,14 +44,14 @@ class HybridRetriever:
         graph: GraphBackend,
         dense_weight: float = 0.7,
         graph_weight: float = 0.3,
-        config: TurboSearchSettings | None = None,
+        config: TurboRAGSettings | None = None,
     ) -> None:
         if not indexes:
-            raise TurboSearchError("HybridRetriever requires at least one TurboIndex")
+            raise TurboRAGError("HybridRetriever requires at least one TurboIndex")
         if not (0.0 <= dense_weight <= 1.0):
-            raise TurboSearchError(f"dense_weight must be in [0, 1], got {dense_weight}")
+            raise TurboRAGError(f"dense_weight must be in [0, 1], got {dense_weight}")
         if not (0.0 <= graph_weight <= 1.0):
-            raise TurboSearchError(f"graph_weight must be in [0, 1], got {graph_weight}")
+            raise TurboRAGError(f"graph_weight must be in [0, 1], got {graph_weight}")
 
         self._indexes = indexes
         self._docstore = docstore
@@ -106,12 +106,12 @@ class HybridRetriever:
         # Validate that every requested name has a vector and a registered index
         for name in active_names:
             if name not in query_vectors:
-                raise TurboSearchError(
+                raise TurboRAGError(
                     f"No query vector provided for index {name!r}. "
                     f"Available: {list(query_vectors)}"
                 )
             if name not in self._indexes:
-                raise TurboSearchError(
+                raise TurboRAGError(
                     f"No index registered with name {name!r}. "
                     f"Registered: {list(self._indexes)}"
                 )

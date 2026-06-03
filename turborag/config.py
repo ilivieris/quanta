@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class TurboSearchSettings(BaseSettings):
+class TurboRAGSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -14,7 +14,7 @@ class TurboSearchSettings(BaseSettings):
     # ── PostgreSQL ────────────────────────────────────────────────────────────
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "turbosearch"
+    POSTGRES_DB: str = "turborag"
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_POOL_SIZE: int = 5

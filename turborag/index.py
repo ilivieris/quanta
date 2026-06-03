@@ -7,9 +7,9 @@ from typing import Any
 import numpy as np
 import xxhash
 
-from turbosearch.exceptions import TurboSearchError
-from turbosearch.types import SearchResult
-from turbosearch.utils.logging import get_logger
+from turborag.exceptions import TurboRAGError
+from turborag.types import SearchResult
+from turborag.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -70,13 +70,13 @@ class TurboIndex:
         try:
             import turbovec
         except ImportError as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 "turbovec is required. Install it with: pip install turbovec"
             ) from exc
         try:
             return turbovec.IdMapIndex(dim=self._dim, bit_width=self._bit_width)
         except Exception as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"Failed to create turbovec.IdMapIndex(dim={self._dim}, "
                 f"bit_width={self._bit_width}): {exc}"
             ) from exc
@@ -84,7 +84,7 @@ class TurboIndex:
     def _resolve_ids(self, ids: list[str]) -> tuple[list[int], list[str]]:
         """Hash every id; detect collisions; return (u64_list, newly_registered).
 
-        Raises ``TurboSearchError`` on collision, leaving internal state unchanged.
+        Raises ``TurboRAGError`` on collision, leaving internal state unchanged.
         """
         u64_ids: list[int] = []
         newly_registered: list[str] = []
@@ -93,7 +93,7 @@ class TurboIndex:
                 u64 = _hash(str_id)
                 existing = self._u64_to_str.get(u64)
                 if existing is not None and existing != str_id:
-                    raise TurboSearchError(
+                    raise TurboRAGError(
                         f"xxhash-64 collision: {str_id!r} and {existing!r} "
                         f"both map to {u64}"
                     )
@@ -102,7 +102,7 @@ class TurboIndex:
                     self._u64_to_str[u64] = str_id
                     newly_registered.append(str_id)
                 u64_ids.append(u64)
-        except TurboSearchError:
+        except TurboRAGError:
             for sid in newly_registered:
                 uid = self._str_to_u64.pop(sid, None)
                 if uid is not None:
@@ -132,11 +132,11 @@ class TurboIndex:
         """
         vectors = np.asarray(vectors, dtype=np.float32)
         if vectors.ndim != 2 or vectors.shape[1] != self._dim:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"vectors must have shape (n, {self._dim}), got {vectors.shape}"
             )
         if vectors.shape[0] != len(ids):
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"len(ids)={len(ids)} does not match vectors.shape[0]={vectors.shape[0]}"
             )
 
@@ -150,7 +150,7 @@ class TurboIndex:
                 uid = self._str_to_u64.pop(sid, None)
                 if uid is not None:
                     self._u64_to_str.pop(uid, None)
-            raise TurboSearchError(f"TurboIndex.add failed: {exc}") from exc
+            raise TurboRAGError(f"TurboIndex.add failed: {exc}") from exc
 
         logger.debug(
             "TurboIndex[%s] added %d vector(s) (size=%d)", self._name, len(ids), len(self)
@@ -168,7 +168,7 @@ class TurboIndex:
         try:
             self._index.remove(u64)
         except Exception as exc:
-            raise TurboSearchError(f"TurboIndex.remove failed for id={id!r}: {exc}") from exc
+            raise TurboRAGError(f"TurboIndex.remove failed for id={id!r}: {exc}") from exc
         del self._str_to_u64[id]
         del self._u64_to_str[u64]
         logger.debug("TurboIndex[%s] removed id=%r (size=%d)", self._name, id, len(self))
@@ -197,12 +197,12 @@ class TurboIndex:
         query = np.asarray(query, dtype=np.float32)
         if query.ndim == 2:
             if query.shape[0] != 1:
-                raise TurboSearchError(
+                raise TurboRAGError(
                     f"2-D query must have shape (1, {self._dim}), got {query.shape}"
                 )
             query = query[0]
         if query.shape != (self._dim,):
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"query must have shape ({self._dim},), got {query.shape}"
             )
 
@@ -216,7 +216,7 @@ class TurboIndex:
             else:
                 raw = self._index.search(query, k=k)
         except Exception as exc:
-            raise TurboSearchError(f"TurboIndex.search failed: {exc}") from exc
+            raise TurboRAGError(f"TurboIndex.search failed: {exc}") from exc
 
         results: list[SearchResult] = []
         for u64_id, score in _normalise_hits(raw):
@@ -242,7 +242,7 @@ class TurboIndex:
         try:
             self._index.save(str(self._tvim_path))
         except Exception as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"TurboIndex.save failed writing {self._tvim_path}: {exc}"
             ) from exc
 
@@ -256,7 +256,7 @@ class TurboIndex:
                 json.dumps(payload, separators=(",", ":")), encoding="utf-8"
             )
         except OSError as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"TurboIndex.save failed writing {self._ids_path}: {exc}"
             ) from exc
 
@@ -278,7 +278,7 @@ class TurboIndex:
 
         for path in (tvim_path, ids_path):
             if not path.exists():
-                raise TurboSearchError(f"Index file not found: {path}")
+                raise TurboRAGError(f"Index file not found: {path}")
 
         try:
             raw_json = ids_path.read_text(encoding="utf-8")
@@ -287,7 +287,7 @@ class TurboIndex:
             bit_width: int = payload["bit_width"]
             mapping: dict[str, int] = payload["ids"]
         except (OSError, json.JSONDecodeError, KeyError) as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"TurboIndex.load failed reading {ids_path}: {exc}"
             ) from exc
 
@@ -295,11 +295,11 @@ class TurboIndex:
             import turbovec
             tv_index = turbovec.IdMapIndex.load(str(tvim_path))
         except ImportError as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 "turbovec is required. Install it with: pip install turbovec"
             ) from exc
         except Exception as exc:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"TurboIndex.load failed reading {tvim_path}: {exc}"
             ) from exc
 

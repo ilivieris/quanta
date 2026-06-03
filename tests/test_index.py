@@ -1,4 +1,4 @@
-"""Tests for turbosearch.index.TurboIndex."""
+"""Tests for turborag.index.TurboIndex."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from turbosearch.exceptions import TurboSearchError
+from turborag.exceptions import TurboRAGError
 
 DIM = 768
 
@@ -31,7 +31,7 @@ def turbovec_mod():
 
 @pytest.fixture
 def turbo_index(turbovec_mod, tmp_index_dir):
-    from turbosearch.index import TurboIndex
+    from turborag.index import TurboIndex
 
     tv, inner = turbovec_mod
     idx = TurboIndex(name="test", dim=DIM, bit_width=4, index_dir=tmp_index_dir)
@@ -59,13 +59,13 @@ def test_add_registers_id_mapping(turbo_index, sample_vectors, sample_ids):
 def test_add_wrong_dim_raises(turbo_index):
     idx, _, _ = turbo_index
     bad = np.zeros((3, 100), dtype=np.float32)
-    with pytest.raises(TurboSearchError, match="shape"):
+    with pytest.raises(TurboRAGError, match="shape"):
         idx.add(bad, ["a", "b", "c"])
 
 
 def test_add_mismatched_ids_raises(turbo_index, sample_vectors):
     idx, _, _ = turbo_index
-    with pytest.raises(TurboSearchError, match="len(ids)"):
+    with pytest.raises(TurboRAGError, match=r"len\(ids\)"):
         idx.add(sample_vectors, ["only-one"])
 
 
@@ -80,7 +80,7 @@ def test_add_duplicate_id_is_idempotent(turbo_index, sample_vectors, sample_ids)
 def test_add_rolls_back_on_turbovec_failure(turbo_index, sample_vectors, sample_ids):
     idx, inner, _ = turbo_index
     inner.add_with_ids.side_effect = RuntimeError("turbovec boom")
-    with pytest.raises(TurboSearchError):
+    with pytest.raises(TurboRAGError):
         idx.add(sample_vectors, sample_ids)
     # Mappings must be clean after failure
     for sid in sample_ids:
@@ -91,7 +91,9 @@ def test_add_rolls_back_on_turbovec_failure(turbo_index, sample_vectors, sample_
 
 def _set_search_return(idx, inner, ids: list[str], scores: list[float]):
     u64s = np.array([idx._str_to_u64[sid] for sid in ids], dtype=np.uint64)
-    inner.search.return_value = (u64s, np.array(scores, dtype=np.float32))
+    result = (u64s, np.array(scores, dtype=np.float32))
+    inner.search.return_value = result
+    inner.search_with_allowlist.return_value = result
 
 
 def test_search_returns_search_results(turbo_index, sample_vectors, sample_ids):
@@ -119,7 +121,7 @@ def test_search_2d_query_squeezed(turbo_index, sample_vectors, sample_ids):
 
 def test_search_bad_query_shape_raises(turbo_index, sample_vectors):
     idx, _, _ = turbo_index
-    with pytest.raises(TurboSearchError, match="shape"):
+    with pytest.raises(TurboRAGError, match="shape"):
         idx.search(np.zeros((2, DIM), dtype=np.float32), k=1)
 
 
@@ -196,7 +198,7 @@ def test_save_creates_both_files(turbo_index, sample_vectors, sample_ids, tmp_in
 
 
 def test_load_restores_mapping(turbovec_mod, sample_vectors, sample_ids, tmp_index_dir):
-    from turbosearch.index import TurboIndex
+    from turborag.index import TurboIndex
 
     tv, inner = turbovec_mod
 
@@ -204,6 +206,8 @@ def test_load_restores_mapping(turbovec_mod, sample_vectors, sample_ids, tmp_ind
     idx = TurboIndex(name="myidx", dim=DIM, index_dir=tmp_index_dir)
     idx.add(sample_vectors, sample_ids)
     idx.save()
+    # The mock doesn't write the .tvim file; create a placeholder so load() can find it.
+    Path(tmp_index_dir, "myidx.tvim").touch()
 
     # Load a fresh instance
     loaded = TurboIndex.load("myidx", index_dir=tmp_index_dir)
@@ -217,9 +221,9 @@ def test_load_restores_mapping(turbovec_mod, sample_vectors, sample_ids, tmp_ind
 
 
 def test_load_missing_file_raises(turbovec_mod, tmp_index_dir):
-    from turbosearch.index import TurboIndex
+    from turborag.index import TurboIndex
 
-    with pytest.raises(TurboSearchError, match="not found"):
+    with pytest.raises(TurboRAGError, match="not found"):
         TurboIndex.load("does_not_exist", index_dir=tmp_index_dir)
 
 

@@ -1,4 +1,4 @@
-# turbosearch
+# turboRAG
 
 Production-ready **hybrid search** library for Python — combines quantised
 vector ANN search (turbovec) with optional Neo4j graph expansion and an async
@@ -68,19 +68,19 @@ PostgreSQL document/chunk store.
 
 ```bash
 # Core — vector search + document store
-pip install turbosearch
+pip install turborag
 
 # With Neo4j graph support
-pip install "turbosearch[neo4j]"
+pip install "turborag[neo4j]"
 
 # With LlamaIndex integration
-pip install "turbosearch[llama-index]"
+pip install "turborag[llama-index]"
 
 # Everything
-pip install "turbosearch[all]"
+pip install "turborag[all]"
 
 # Development
-pip install "turbosearch[dev]"
+pip install "turborag[dev]"
 ```
 
 ---
@@ -132,7 +132,7 @@ All remaining variables have sensible defaults — see the
 
 ```python
 import numpy as np
-from turbosearch import TurboIndex
+from turborag import TurboIndex
 
 # Create a 768-dimensional index (e.g. for sentence-transformers)
 idx = TurboIndex(name="articles", dim=768, bit_width=4, index_dir="./indexes")
@@ -161,10 +161,10 @@ idx2 = TurboIndex.load("articles", index_dir="./indexes")
 ```python
 import asyncio
 import numpy as np
-from turbosearch import TurboSearchSettings, DocStore, TurboIndex, HybridRetriever, NullGraph
+from turborag import TurboRAGSettings, DocStore, TurboIndex, HybridRetriever, NullGraph
 
 async def main():
-    settings = TurboSearchSettings()  # reads from .env
+    settings = TurboRAGSettings()  # reads from .env
 
     # Initialise the document store
     docstore = DocStore(settings)
@@ -211,13 +211,13 @@ asyncio.run(main())
 ```python
 import asyncio
 import numpy as np
-from turbosearch import (
-    TurboSearchSettings, DocStore, TurboIndex,
+from turborag import (
+    TurboRAGSettings, DocStore, TurboIndex,
     HybridRetriever, get_graph_backend, Neo4jGraph,
 )
 
 async def main():
-    settings = TurboSearchSettings()   # NEO4J_URI must be set in .env
+    settings = TurboRAGSettings()   # NEO4J_URI must be set in .env
     docstore = DocStore(settings)
     await docstore.init()
 
@@ -266,15 +266,15 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from turbosearch import TurboSearchSettings, DocStore, TurboIndex, HybridRetriever, NullGraph
-from turbosearch.integrations.llama_index import TurboSearchVectorStore
+from turborag import TurboRAGSettings, DocStore, TurboIndex, HybridRetriever, NullGraph
+from turborag.integrations.llama_index import TurboRAGVectorStore
 
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document
 
 async def main():
-    settings = TurboSearchSettings()
+    settings = TurboRAGSettings()
     docstore = DocStore(settings)
     await docstore.init()
 
@@ -287,7 +287,7 @@ async def main():
     )
 
     # Wrap as a LlamaIndex VectorStore
-    store = TurboSearchVectorStore(
+    store = TurboRAGVectorStore(
         retriever=retriever,
         index_name="llamaidx",
         embed_dim=1536,
@@ -295,12 +295,12 @@ async def main():
 
     # Use as a standard LlamaIndex storage context
     storage_ctx = StorageContext.from_defaults(vector_store=store)
-    docs = [Document(text="TurboSearch makes hybrid search easy.")]
+    docs = [Document(text="TurboRAG makes hybrid search easy.")]
     li_index = VectorStoreIndex.from_documents(docs, storage_context=storage_ctx)
 
     # Query
     engine = li_index.as_query_engine()
-    response = await engine.aquery("What does TurboSearch do?")
+    response = await engine.aquery("What does TurboRAG do?")
     print(response)
 
     await docstore.close()
@@ -319,7 +319,7 @@ working directory). No prefix is required.
 |---|---|---|
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server host |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
-| `POSTGRES_DB` | `turbosearch` | Database name |
+| `POSTGRES_DB` | `turborag` | Database name |
 | `POSTGRES_USER` | *(required)* | Database username |
 | `POSTGRES_PASSWORD` | *(required)* | Database password |
 | `POSTGRES_POOL_SIZE` | `5` | Max async connection pool size |
@@ -370,10 +370,10 @@ pytest
 pytest tests/test_retriever.py -v
 
 # Lint
-ruff check turbosearch/
+ruff check turborag/
 
 # Type-check
-mypy turbosearch/
+mypy turborag/
 ```
 
 ---

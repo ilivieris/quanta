@@ -1,15 +1,18 @@
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: turborag-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-turbosearch}
+      POSTGRES_DB: ${POSTGRES_DB:-turborag}
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - turborag-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -18,6 +21,7 @@ services:
 
   neo4j:
     image: neo4j:5-community
+    container_name: turborag-neo4j
     restart: unless-stopped
     profiles:
       - graph
@@ -29,6 +33,8 @@ services:
       - "7687:7687"
     volumes:
       - neo4j_data:/data
+    networks:
+      - turborag-network
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
       interval: 15s
@@ -38,3 +44,6 @@ services:
 volumes:
   postgres_data:
   neo4j_data:
+
+networks:
+  turborag-network:

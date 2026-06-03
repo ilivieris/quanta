@@ -1,12 +1,12 @@
-"""LlamaIndex VectorStore integration for TurboSearch.
+"""LlamaIndex VectorStore integration for TurboRAG.
 
 Usage::
 
-    from turbosearch import HybridRetriever, TurboIndex, DocStore
-    from turbosearch.integrations.llama_index import TurboSearchVectorStore
+    from turborag import HybridRetriever, TurboIndex, DocStore
+    from turborag.integrations.llama_index import TurboRAGVectorStore
     from llama_index.core import VectorStoreIndex, StorageContext
 
-    store = TurboSearchVectorStore(
+    store = TurboRAGVectorStore(
         retriever=retriever,
         index_name="text",
         embed_dim=1536,
@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from turbosearch.exceptions import TurboSearchError
-from turbosearch.retriever import HybridRetriever
-from turbosearch.utils.logging import get_logger
+from turborag.exceptions import TurboRAGError
+from turborag.retriever import HybridRetriever
+from turborag.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -31,11 +31,11 @@ def _require_llama_index() -> None:
         import llama_index.core  # noqa: F401
     except ImportError as exc:
         raise ImportError(
-            "llama-index-core is required. Install it with: pip install turbosearch[llama-index]"
+            "llama-index-core is required. Install it with: pip install turborag[llama-index]"
         ) from exc
 
 
-class TurboSearchVectorStore:
+class TurboRAGVectorStore:
     """LlamaIndex-compatible ``VectorStore`` backed by a :class:`HybridRetriever`.
 
     Write path (``async_add`` / ``adelete``):
@@ -57,7 +57,7 @@ class TurboSearchVectorStore:
     ) -> None:
         _require_llama_index()
         if index_name not in retriever.indexes:
-            raise TurboSearchError(
+            raise TurboRAGError(
                 f"index_name={index_name!r} not found in retriever. "
                 f"Available: {list(retriever.indexes)}"
             )
@@ -78,12 +78,12 @@ class TurboSearchVectorStore:
         for raw_node in nodes:
             node: TextNode = cast(TextNode, raw_node)
             if node.embedding is None:
-                raise TurboSearchError(
+                raise TurboRAGError(
                     f"Node {node.node_id!r} has no embedding — run an embedder before adding."
                 )
             chunk_id = node.node_id or None
             if chunk_id is None:
-                raise TurboSearchError("LlamaIndex node is missing a node_id.")
+                raise TurboRAGError("LlamaIndex node is missing a node_id.")
 
             document_id = node.ref_doc_id or chunk_id
             chunk_index: int = node.metadata.get("chunk_index", 0)
@@ -100,7 +100,7 @@ class TurboSearchVectorStore:
             ids.append(chunk_id)
 
         logger.info(
-            "TurboSearchVectorStore[%s] added %d node(s)", self._index_name, len(ids)
+            "TurboRAGVectorStore[%s] added %d node(s)", self._index_name, len(ids)
         )
         return ids
 
@@ -114,7 +114,7 @@ class TurboSearchVectorStore:
             await self._retriever.docstore.delete_document(chunk.id)
             idx.remove(chunk.id)
         logger.info(
-            "TurboSearchVectorStore[%s] deleted %d chunk(s) for doc %r",
+            "TurboRAGVectorStore[%s] deleted %d chunk(s) for doc %r",
             self._index_name,
             len(chunks),
             ref_doc_id,
@@ -126,7 +126,7 @@ class TurboSearchVectorStore:
         from llama_index.core.vector_stores.types import VectorStoreQueryResult
 
         if query.query_embedding is None:
-            raise TurboSearchError("VectorStoreQuery must include query_embedding.")
+            raise TurboRAGError("VectorStoreQuery must include query_embedding.")
 
         results = await self._retriever.search(
             query_vectors={self._index_name: query.query_embedding},
@@ -153,7 +153,7 @@ class TurboSearchVectorStore:
 
     # Synchronous stubs — LlamaIndex requires them even when only async is used.
     def add(self, nodes: list[Any], **kwargs: Any) -> list[str]:  # noqa: ARG002
-        raise NotImplementedError("Use async_add for TurboSearchVectorStore.")
+        raise NotImplementedError("Use async_add for TurboRAGVectorStore.")
 
     def query(self, query: Any, **kwargs: Any) -> Any:  # noqa: ARG002
-        raise NotImplementedError("Use aquery for TurboSearchVectorStore.")
+        raise NotImplementedError("Use aquery for TurboRAGVectorStore.")

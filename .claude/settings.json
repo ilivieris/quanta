@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -m pip list)",
+      "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -m pip install pytest pytest-asyncio --quiet)",
+      "Bash(python3 -c ' *)",
+      "Bash(/c/Users/ioann/AppData/Local/Programs/Python/Python313/python.exe -c ' *)"
+    ]
+  }
+}
