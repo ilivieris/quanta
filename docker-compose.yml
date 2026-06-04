@@ -41,9 +41,27 @@
       timeout: 10s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: Quanta-redis
+    restart: unless-stopped
+    profiles:
+      - cache
+    ports:
+      - "6379:6379"
+    command: >
+      sh -c "if [ -n \"$$REDIS_PASSWORD\" ];
+             then redis-server --requirepass $$REDIS_PASSWORD;
+             else redis-server; fi"
+    volumes:
+      - redis_data:/data
+    networks:
+      - Quanta-network
+
 volumes:
   postgres_data:
   neo4j_data:
+  redis_data:
 
 networks:
   Quanta-network:

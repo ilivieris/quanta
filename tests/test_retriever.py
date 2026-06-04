@@ -1,4 +1,4 @@
-﻿"""Tests for Quanta.retriever.MultiRetriever."""
+"""Tests for quanta.retriever.MultiRetriever."""
 
 from __future__ import annotations
 
@@ -195,7 +195,7 @@ async def test_graph_expanded_ids_get_graph_source(mock_docstore, query_vec):
     idx = _make_index([SearchResult(id="dense-hit", score=0.9)])
 
     mock_graph = MagicMock(spec=["expand", "navigate", "neighbors", "close"])
-    mock_graph.expand.return_value = [("graph-only-id", 0.8)]
+    mock_graph.expand = AsyncMock(return_value=[("graph-only-id", 0.8)])
 
     mock_docstore.get_chunks = AsyncMock(return_value=[
         _make_chunk("dense-hit"),
@@ -220,7 +220,7 @@ async def test_dense_plus_graph_source_tag(mock_docstore, query_vec):
     idx = _make_index([SearchResult(id="ch-0", score=0.9)])
 
     mock_graph = MagicMock(spec=["expand", "navigate", "neighbors", "close"])
-    mock_graph.expand.return_value = [("ch-0", 0.5)]  # same id
+    mock_graph.expand = AsyncMock(return_value=[("ch-0", 0.5)])  # same id
 
     mock_docstore.get_chunks = AsyncMock(return_value=[_make_chunk("ch-0")])
 
@@ -281,25 +281,25 @@ async def test_filters_allowed_ids_passed_to_index(mock_docstore, null_graph, qu
 
 # ── navigate ──────────────────────────────────────────────────────────────────
 
-def test_navigate_delegates_to_graph(mock_docstore, null_graph):
+async def test_navigate_delegates_to_graph(mock_docstore, null_graph):
     idx = _make_index([])
     retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
     )
-    result = retriever.navigate("start-id", relation_type=None, hops=2)
+    result = await retriever.navigate("start-id", relation_type=None, hops=2)
     assert result == []  # NullGraph always returns empty
 
 
-def test_navigate_passes_relation_type(mock_docstore, query_vec):
+async def test_navigate_passes_relation_type(mock_docstore, query_vec):
     mock_graph = MagicMock(spec=["expand", "navigate", "neighbors", "close"])
     expected = [GraphNode(id="nb-1", title=None, relation="CITES", distance=1)]
-    mock_graph.navigate.return_value = expected
+    mock_graph.navigate = AsyncMock(return_value=expected)
 
     idx = _make_index([])
     retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=mock_graph
     )
-    result = retriever.navigate("doc-1", relation_type="CITES", hops=1)
+    result = await retriever.navigate("doc-1", relation_type="CITES", hops=1)
     assert result == expected
     mock_graph.navigate.assert_called_once_with("doc-1", "CITES", 1)
 

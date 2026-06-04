@@ -128,8 +128,13 @@ class QuantaVectorStore:
 
     async def aquery(self, query: Any, **kwargs: Any) -> Any:
         """Run a vector query and return a ``VectorStoreQueryResult``."""
-        from llama_index.core.schema import NodeWithScore, TextNode
-        from llama_index.core.vector_stores.types import VectorStoreQueryResult
+        from llama_index.core.schema import (
+            NodeWithScore,
+            TextNode,
+        )
+        from llama_index.core.vector_stores.types import (
+            VectorStoreQueryResult,
+        )
 
         if query.query_embedding is None:
             raise QuantaError("VectorStoreQuery must include query_embedding.")

@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
@@ -31,6 +31,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "numpy>=1.24",
     "xxhash>=3.0",
+    "duckdb>=0.9",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +41,15 @@ neo4j = [
 llama-index = [
     "llama-index-core>=0.10",
 ]
+duckdb = [
+    "duckdb>=0.9",
+]
+cache = [
+    "redis>=4.0",
+]
+bm25 = [
+    "tantivy>=0.21",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -47,7 +57,7 @@ dev = [
     "ruff>=0.3",
 ]
 all = [
-    "quanta[neo4j,llama-index]",
+    "quanta[neo4j,llama-index,duckdb,cache,bm25]",
 ]
 
 [tool.hatch.build.targets.wheel]

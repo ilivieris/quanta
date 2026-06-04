@@ -215,11 +215,11 @@ class QuantaIndex:
                 if not u64_allowlist:
                     return []
                 allowlist = np.array(u64_allowlist, dtype=np.uint64)
-                scores_batch, ids_batch = self._index.search(queries, k=k, allowlist=allowlist)
+                scores_batch, ids_batch = self._index.search_with_allowlist(queries, k=k, allowlist=allowlist)
             else:
                 scores_batch, ids_batch = self._index.search(queries, k=k)
             # turbovec returns (scores, ids) each shape (1, k); unpack the single row
-            raw = list(zip(ids_batch[0].tolist(), scores_batch[0].tolist()))
+            raw = list(zip(ids_batch[0].tolist(), scores_batch[0].tolist(), strict=True))
         except QuantaError:
             raise
         except Exception as exc:

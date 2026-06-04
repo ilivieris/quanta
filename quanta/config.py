@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +35,28 @@ class QuantaSettings(BaseSettings):
     DEFAULT_BIT_WIDTH: int = 4
     DEFAULT_TOP_K: int = 10
 
+    # ── Docstore backend ──────────────────────────────────────────────────────
+    DOCSTORE_BACKEND: Literal["postgres", "duckdb"] = "postgres"
+    DUCKDB_PATH: str = "./quanta.duckdb"
+
+    # ── Redis embedding cache ─────────────────────────────────────────────────
+    REDIS_HOST: str | None = None
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str | None = None
+    REDIS_DB: int = 0
+    REDIS_TTL_SECONDS: int = 86400
+
+    # ── Chunking ──────────────────────────────────────────────────────────────
+    CHUNKING_STRATEGY: Literal["fixed", "sentence", "semantic", "recursive"] = "fixed"
+    CHUNKING_SIZE: int = 512
+    CHUNKING_OVERLAP: int = 64
+    CHUNKING_MAX_SENTENCES: int = 5
+    CHUNKING_SEMANTIC_THRESHOLD: float = 0.85
+
+    # ── BM25 (optional — tantivy backend) ────────────────────────────────────
+    BM25_BACKEND: Literal["tantivy"] | None = None
+    TANTIVY_INDEX_PATH: str = "./quanta_tantivy"
+
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property
     def postgres_dsn(self) -> str:
@@ -47,4 +71,4 @@ class QuantaSettings(BaseSettings):
 
 
 def get_settings() -> QuantaSettings:
-    return QuantaSettings()
+    return QuantaSettings()  # type: ignore[call-arg]
