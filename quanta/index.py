@@ -209,17 +209,20 @@ class QuantaIndex:
         try:
             queries = query[np.newaxis]  # (1, dim) — turbovec requires 2-D batch
             if allowed_ids is not None:
-                u64_allowlist = [
+                u64_allowset = {
                     self._str_to_u64[sid] for sid in allowed_ids if sid in self._str_to_u64
-                ]
-                if not u64_allowlist:
+                }
+                if not u64_allowset:
                     return []
-                allowlist = np.array(u64_allowlist, dtype=np.uint64)
-                scores_batch, ids_batch = self._index.search_with_allowlist(queries, k=k, allowlist=allowlist)
+                # Retrieve all vectors and filter in Python (no native allowlist support)
+                n_total = max(len(self._str_to_u64), k)
+                scores_batch, ids_batch = self._index.search(queries, k=n_total)
+                raw_all = list(zip(ids_batch[0].tolist(), scores_batch[0].tolist(), strict=True))
+                raw = [(uid, s) for uid, s in raw_all if uid in u64_allowset][:k]
             else:
                 scores_batch, ids_batch = self._index.search(queries, k=k)
-            # turbovec returns (scores, ids) each shape (1, k); unpack the single row
-            raw = list(zip(ids_batch[0].tolist(), scores_batch[0].tolist(), strict=True))
+                # turbovec returns (scores, ids) each shape (1, k); unpack the single row
+                raw = list(zip(ids_batch[0].tolist(), scores_batch[0].tolist(), strict=True))
         except QuantaError:
             raise
         except Exception as exc:

@@ -22,7 +22,7 @@ import time
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from Quanta import QuantaIndex
+from quanta import QuantaIndex
 from quanta.config import get_settings
 from quanta.docstore import DocStore
 from quanta.graph import get_graph_backend
@@ -173,7 +173,7 @@ async def main() -> None:
     log.info("DocStore ready in %.2f s", time.perf_counter() - t0)
 
     text_index = QuantaIndex(name="gdpr", dim=cfg.EMBED_DIM, bit_width=4)
-    graph = get_graph_backend(cfg)
+    graph = await get_graph_backend(cfg)
     retriever = MultiRetriever(
         indexes={"text": text_index},
         docstore=docstore,

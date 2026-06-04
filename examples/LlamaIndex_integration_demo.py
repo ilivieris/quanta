@@ -16,7 +16,7 @@ from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import VectorStoreQuery
 from sentence_transformers import SentenceTransformer
 
-from Quanta import QuantaIndex
+from quanta import QuantaIndex
 from quanta.config import get_settings
 from quanta.docstore import DocStore
 from quanta.integrations.llama_index import QuantaVectorStore

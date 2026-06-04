@@ -25,7 +25,7 @@ import time
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from Quanta import QuantaIndex
+from quanta import QuantaIndex
 from quanta.config import get_settings
 
 # ── Logging ────────────────────────────────────────────────────────────────────
