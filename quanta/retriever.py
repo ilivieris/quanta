@@ -1,16 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 
-from turborag.config import TurboRAGSettings
-from turborag.docstore import DocStore
-from turborag.exceptions import TurboRAGError
-from turborag.graph import GraphBackend, NullGraph
-from turborag.index import TurboIndex
-from turborag.types import GraphNode, RetrievalResult
-from turborag.utils.logging import get_logger
+from quanta.config import QuantaSettings
+from quanta.docstore import DocStore
+from quanta.exceptions import QuantaError
+from quanta.graph import GraphBackend, NullGraph
+from quanta.index import QuantaIndex
+from quanta.types import GraphNode, RetrievalResult
+from quanta.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -27,10 +27,10 @@ def _normalize(scores: list[float]) -> list[float]:
     return [(s - lo) / span for s in scores]
 
 
-class HybridRetriever:
+class MultiRetriever:
     """Multi-index hybrid retriever combining dense ANN search with graph expansion.
 
-    Maintains a named pool of :class:`TurboIndex` instances so queries can be
+    Maintains a named pool of :class:`QuantaIndex` instances so queries can be
     issued against one or more modality indexes simultaneously (e.g. ``"text"``
     and ``"images"``).  Scores from all active indexes are normalised then
     merged; an optional graph expansion step re-scores results using
@@ -39,19 +39,19 @@ class HybridRetriever:
 
     def __init__(
         self,
-        indexes: dict[str, TurboIndex],
+        indexes: dict[str, QuantaIndex],
         docstore: DocStore,
         graph: GraphBackend | None = None,
         dense_weight: float = 0.7,
         graph_weight: float = 0.3,
-        config: TurboRAGSettings | None = None,
+        config: QuantaSettings | None = None,
     ) -> None:
         if not indexes:
-            raise TurboRAGError("HybridRetriever requires at least one TurboIndex")
+            raise QuantaError("MultiRetriever requires at least one QuantaIndex")
         if not (0.0 <= dense_weight <= 1.0):
-            raise TurboRAGError(f"dense_weight must be in [0, 1], got {dense_weight}")
+            raise QuantaError(f"dense_weight must be in [0, 1], got {dense_weight}")
         if not (0.0 <= graph_weight <= 1.0):
-            raise TurboRAGError(f"graph_weight must be in [0, 1], got {graph_weight}")
+            raise QuantaError(f"graph_weight must be in [0, 1], got {graph_weight}")
 
         self._indexes = indexes
         self._docstore = docstore
@@ -63,7 +63,7 @@ class HybridRetriever:
     # ── Public properties (used by integrations) ──────────────────────────────
 
     @property
-    def indexes(self) -> dict[str, TurboIndex]:
+    def indexes(self) -> dict[str, QuantaIndex]:
         return self._indexes
 
     @property
@@ -106,12 +106,12 @@ class HybridRetriever:
         # Validate that every requested name has a vector and a registered index
         for name in active_names:
             if name not in query_vectors:
-                raise TurboRAGError(
+                raise QuantaError(
                     f"No query vector provided for index {name!r}. "
                     f"Available: {list(query_vectors)}"
                 )
             if name not in self._indexes:
-                raise TurboRAGError(
+                raise QuantaError(
                     f"No index registered with name {name!r}. "
                     f"Registered: {list(self._indexes)}"
                 )

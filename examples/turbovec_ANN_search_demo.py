@@ -1,17 +1,17 @@
-"""
+﻿"""
 turbovec · Pure ANN Search Demo
 ================================
 
 Indexes 10 GDPR articles with a 4-bit quantised turbovec IdMapIndex,
 then retrieves the top-4 nearest neighbours for a Greek-language query
-using HybridRetriever with graph expansion explicitly disabled.
+using MultiRetriever with graph expansion explicitly disabled.
 
 Demonstrates: IdMapIndex.search() — dense vector similarity, no graph.
 
 Prerequisites
 ─────────────
   .env with POSTGRES vars + EMBED_MODEL
-  pip install turborag sentence-transformers
+  pip install Quanta sentence-transformers
 """
 
 import asyncio
@@ -22,11 +22,11 @@ import time
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from turborag import TurboIndex
-from turborag.config import get_settings
-from turborag.docstore import DocStore
-from turborag.graph import get_graph_backend
-from turborag.retriever import HybridRetriever
+from Quanta import QuantaIndex
+from quanta.config import get_settings
+from quanta.docstore import DocStore
+from quanta.graph import get_graph_backend
+from quanta.retriever import MultiRetriever
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
@@ -165,16 +165,16 @@ async def main() -> None:
         return vecs
 
     # ── Infrastructure ────────────────────────────────────────────────────────
-    log.info("Initialising DocStore + TurboIndex + HybridRetriever …")
-    print("[2/3]  Initialising DocStore + TurboIndex + HybridRetriever …")
+    log.info("Initialising DocStore + QuantaIndex + MultiRetriever …")
+    print("[2/3]  Initialising DocStore + QuantaIndex + MultiRetriever …")
     t0 = time.perf_counter()
     docstore = DocStore(cfg)
     await docstore.init()
     log.info("DocStore ready in %.2f s", time.perf_counter() - t0)
 
-    text_index = TurboIndex(name="gdpr", dim=cfg.EMBED_DIM, bit_width=4)
+    text_index = QuantaIndex(name="gdpr", dim=cfg.EMBED_DIM, bit_width=4)
     graph = get_graph_backend(cfg)
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": text_index},
         docstore=docstore,
         graph=graph,
@@ -207,7 +207,7 @@ async def main() -> None:
 
     ids = [art_id for art_id, _, _ in ARTICLES]
     text_index.add(embeddings, ids)
-    log.info("TurboIndex: %d vectors added", len(text_index))
+    log.info("QuantaIndex: %d vectors added", len(text_index))
     print(f"\n    turbovec IdMapIndex: {len(text_index)} vectors  (dim={cfg.EMBED_DIM}, 4-bit)")
 
     # ── Q1: Pure dense ANN — no graph ─────────────────────────────────────────

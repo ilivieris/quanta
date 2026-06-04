@@ -1,4 +1,4 @@
-# turboRAG
+﻿# Quanta
 
 Production-ready **hybrid search** library for Python — combines quantised
 vector ANN search (turbovec) with optional Neo4j graph expansion and an async
@@ -8,7 +8,7 @@ PostgreSQL document/chunk store.
 
 ## Features
 
-- **Multi-index ANN search** — query `n` named `TurboIndex` instances in one
+- **Multi-index ANN search** — query `n` named `QuantaIndex` instances in one
   call (e.g. `"text"` + `"images"`), scores normalised and merged
 - **Graph expansion** — Neo4j traversal widens recall beyond pure ANN; a
   `NullGraph` fallback keeps the interface identical when Neo4j is absent
@@ -30,10 +30,10 @@ PostgreSQL document/chunk store.
               │
               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                     HybridRetriever                         │
+│                     MultiRetriever                         │
 │                                                             │
 │  ┌──────────────────┐     ┌──────────────────┐             │
-│  │   TurboIndex     │     │   TurboIndex     │             │
+│  │   QuantaIndex     │     │   QuantaIndex     │             │
 │  │    "text"        │     │   "images"       │             │
 │  │  turbovec ANN    │     │  turbovec ANN    │             │
 │  │  xxhash-64 IDs   │     │  xxhash-64 IDs   │             │
@@ -68,19 +68,19 @@ PostgreSQL document/chunk store.
 
 ```bash
 # Core — vector search + document store
-pip install turborag
+pip install Quanta
 
 # With Neo4j graph support
-pip install "turborag[neo4j]"
+pip install "quanta[neo4j]"
 
 # With LlamaIndex integration
-pip install "turborag[llama-index]"
+pip install "quanta[llama-index]"
 
 # Everything
-pip install "turborag[all]"
+pip install "Quanta[all]"
 
 # Development
-pip install "turborag[dev]"
+pip install "Quanta[dev]"
 ```
 
 ---
@@ -128,14 +128,14 @@ All remaining variables have sensible defaults — see the
 
 ## Usage examples
 
-### a) Basic: create a TurboIndex, add vectors, search
+### a) Basic: create a QuantaIndex, add vectors, search
 
 ```python
 import numpy as np
-from turborag import TurboIndex
+from Quanta import QuantaIndex
 
 # Create a 768-dimensional index (e.g. for sentence-transformers)
-idx = TurboIndex(name="articles", dim=768, bit_width=4, index_dir="./indexes")
+idx = QuantaIndex(name="articles", dim=768, bit_width=4, index_dir="./indexes")
 
 # Add vectors
 vectors = np.random.rand(100, 768).astype(np.float32)
@@ -153,29 +153,29 @@ for r in results:
 idx.save()
 
 # Reload later
-idx2 = TurboIndex.load("articles", index_dir="./indexes")
+idx2 = QuantaIndex.load("articles", index_dir="./indexes")
 ```
 
-### b) Full pipeline: DocStore + HybridRetriever
+### b) Full pipeline: DocStore + MultiRetriever
 
 ```python
 import asyncio
 import numpy as np
-from turborag import TurboRAGSettings, DocStore, TurboIndex, HybridRetriever, NullGraph
+from Quanta import QuantaSettings, DocStore, QuantaIndex, MultiRetriever, NullGraph
 
 async def main():
-    settings = TurboRAGSettings()  # reads from .env
+    settings = QuantaSettings()  # reads from .env
 
     # Initialise the document store
     docstore = DocStore(settings)
     await docstore.init()
 
     # Create a vector index
-    idx = TurboIndex(name="text", dim=768, index_dir="./indexes")
+    idx = QuantaIndex(name="text", dim=768, index_dir="./indexes")
     idx.initialize(dimension=768)   # or just construct with dim=
 
     # Build the retriever (NullGraph = no Neo4j)
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx},
         docstore=docstore,
         graph=NullGraph(),
@@ -211,22 +211,22 @@ asyncio.run(main())
 ```python
 import asyncio
 import numpy as np
-from turborag import (
-    TurboRAGSettings, DocStore, TurboIndex,
-    HybridRetriever, get_graph_backend, Neo4jGraph,
+from Quanta import (
+    QuantaSettings, DocStore, QuantaIndex,
+    MultiRetriever, get_graph_backend, Neo4jGraph,
 )
 
 async def main():
-    settings = TurboRAGSettings()   # NEO4J_URI must be set in .env
+    settings = QuantaSettings()   # NEO4J_URI must be set in .env
     docstore = DocStore(settings)
     await docstore.init()
 
-    idx = TurboIndex(name="text", dim=768, index_dir="./indexes")
+    idx = QuantaIndex(name="text", dim=768, index_dir="./indexes")
 
     # Factory returns Neo4jGraph if NEO4J_URI is set, else NullGraph
     graph = get_graph_backend(settings)
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx},
         docstore=docstore,
         graph=graph,
@@ -266,28 +266,28 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from turborag import TurboRAGSettings, DocStore, TurboIndex, HybridRetriever, NullGraph
-from turborag.integrations.llama_index import TurboRAGVectorStore
+from Quanta import QuantaSettings, DocStore, QuantaIndex, MultiRetriever, NullGraph
+from quanta.integrations.llama_index import QuantaVectorStore
 
 from llama_index.core import VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document
 
 async def main():
-    settings = TurboRAGSettings()
+    settings = QuantaSettings()
     docstore = DocStore(settings)
     await docstore.init()
 
-    idx = TurboIndex(name="llamaidx", dim=1536, index_dir="./indexes")
+    idx = QuantaIndex(name="llamaidx", dim=1536, index_dir="./indexes")
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"llamaidx": idx},
         docstore=docstore,
         graph=NullGraph(),
     )
 
     # Wrap as a LlamaIndex VectorStore
-    store = TurboRAGVectorStore(
+    store = QuantaVectorStore(
         retriever=retriever,
         index_name="llamaidx",
         embed_dim=1536,
@@ -295,12 +295,12 @@ async def main():
 
     # Use as a standard LlamaIndex storage context
     storage_ctx = StorageContext.from_defaults(vector_store=store)
-    docs = [Document(text="TurboRAG makes hybrid search easy.")]
+    docs = [Document(text="Quanta makes hybrid search easy.")]
     li_index = VectorStoreIndex.from_documents(docs, storage_context=storage_ctx)
 
     # Query
     engine = li_index.as_query_engine()
-    response = await engine.aquery("What does TurboRAG do?")
+    response = await engine.aquery("What does Quanta do?")
     print(response)
 
     await docstore.close()
@@ -319,7 +319,7 @@ working directory). No prefix is required.
 |---|---|---|
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server host |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
-| `POSTGRES_DB` | `turborag` | Database name |
+| `POSTGRES_DB` | `Quanta` | Database name |
 | `POSTGRES_USER` | *(required)* | Database username |
 | `POSTGRES_PASSWORD` | *(required)* | Database password |
 | `POSTGRES_POOL_SIZE` | `5` | Max async connection pool size |
@@ -370,10 +370,10 @@ pytest
 pytest tests/test_retriever.py -v
 
 # Lint
-ruff check turborag/
+ruff check Quanta/
 
 # Type-check
-mypy turborag/
+mypy Quanta/
 ```
 
 ---

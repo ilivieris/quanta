@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class TurboRAGSettings(BaseSettings):
+class QuantaSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -14,7 +14,7 @@ class TurboRAGSettings(BaseSettings):
     # ── PostgreSQL ────────────────────────────────────────────────────────────
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "turborag"
+    POSTGRES_DB: str = "quanta"
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_POOL_SIZE: int = 5
@@ -46,5 +46,5 @@ class TurboRAGSettings(BaseSettings):
         return bool(self.NEO4J_URI and self.NEO4J_USER and self.NEO4J_PASSWORD)
 
 
-def get_settings() -> TurboRAGSettings:
-    return TurboRAGSettings()
+def get_settings() -> QuantaSettings:
+    return QuantaSettings()

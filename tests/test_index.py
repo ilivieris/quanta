@@ -1,4 +1,4 @@
-"""Tests for turborag.index.TurboIndex."""
+﻿"""Tests for Quanta.index.QuantaIndex."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from turborag.exceptions import TurboRAGError
+from quanta.exceptions import QuantaError
 
 DIM = 768
 
@@ -19,7 +19,7 @@ DIM = 768
 
 @pytest.fixture
 def turbovec_mod():
-    """Patch sys.modules so TurboIndex uses a fake turbovec."""
+    """Patch sys.modules so QuantaIndex uses a fake turbovec."""
     tv = MagicMock()
     inner = MagicMock()
     inner.__len__ = MagicMock(return_value=0)
@@ -31,10 +31,10 @@ def turbovec_mod():
 
 @pytest.fixture
 def turbo_index(turbovec_mod, tmp_index_dir):
-    from turborag.index import TurboIndex
+    from quanta.index import QuantaIndex
 
     tv, inner = turbovec_mod
-    idx = TurboIndex(name="test", dim=DIM, bit_width=4, index_dir=tmp_index_dir)
+    idx = QuantaIndex(name="test", dim=DIM, bit_width=4, index_dir=tmp_index_dir)
     return idx, inner, tv
 
 
@@ -59,13 +59,13 @@ def test_add_registers_id_mapping(turbo_index, sample_vectors, sample_ids):
 def test_add_wrong_dim_raises(turbo_index):
     idx, _, _ = turbo_index
     bad = np.zeros((3, 100), dtype=np.float32)
-    with pytest.raises(TurboRAGError, match="shape"):
+    with pytest.raises(QuantaError, match="shape"):
         idx.add(bad, ["a", "b", "c"])
 
 
 def test_add_mismatched_ids_raises(turbo_index, sample_vectors):
     idx, _, _ = turbo_index
-    with pytest.raises(TurboRAGError, match=r"len\(ids\)"):
+    with pytest.raises(QuantaError, match=r"len\(ids\)"):
         idx.add(sample_vectors, ["only-one"])
 
 
@@ -80,7 +80,7 @@ def test_add_duplicate_id_is_idempotent(turbo_index, sample_vectors, sample_ids)
 def test_add_rolls_back_on_turbovec_failure(turbo_index, sample_vectors, sample_ids):
     idx, inner, _ = turbo_index
     inner.add_with_ids.side_effect = RuntimeError("turbovec boom")
-    with pytest.raises(TurboRAGError):
+    with pytest.raises(QuantaError):
         idx.add(sample_vectors, sample_ids)
     # Mappings must be clean after failure
     for sid in sample_ids:
@@ -123,7 +123,7 @@ def test_search_2d_query_squeezed(turbo_index, sample_vectors, sample_ids):
 
 def test_search_bad_query_shape_raises(turbo_index, sample_vectors):
     idx, _, _ = turbo_index
-    with pytest.raises(TurboRAGError, match="shape"):
+    with pytest.raises(QuantaError, match="shape"):
         idx.search(np.zeros((2, DIM), dtype=np.float32), k=1)
 
 
@@ -200,19 +200,19 @@ def test_save_creates_both_files(turbo_index, sample_vectors, sample_ids, tmp_in
 
 
 def test_load_restores_mapping(turbovec_mod, sample_vectors, sample_ids, tmp_index_dir):
-    from turborag.index import TurboIndex
+    from quanta.index import QuantaIndex
 
     tv, inner = turbovec_mod
 
     # Build, populate, and save an index
-    idx = TurboIndex(name="myidx", dim=DIM, index_dir=tmp_index_dir)
+    idx = QuantaIndex(name="myidx", dim=DIM, index_dir=tmp_index_dir)
     idx.add(sample_vectors, sample_ids)
     idx.save()
     # The mock doesn't write the .tvim file; create a placeholder so load() can find it.
     Path(tmp_index_dir, "myidx.tvim").touch()
 
     # Load a fresh instance
-    loaded = TurboIndex.load("myidx", index_dir=tmp_index_dir)
+    loaded = QuantaIndex.load("myidx", index_dir=tmp_index_dir)
 
     assert loaded._dim == DIM
     assert loaded._bit_width == 4
@@ -223,10 +223,10 @@ def test_load_restores_mapping(turbovec_mod, sample_vectors, sample_ids, tmp_ind
 
 
 def test_load_missing_file_raises(turbovec_mod, tmp_index_dir):
-    from turborag.index import TurboIndex
+    from quanta.index import QuantaIndex
 
-    with pytest.raises(TurboRAGError, match="not found"):
-        TurboIndex.load("does_not_exist", index_dir=tmp_index_dir)
+    with pytest.raises(QuantaError, match="not found"):
+        QuantaIndex.load("does_not_exist", index_dir=tmp_index_dir)
 
 
 def test_repr(turbo_index):

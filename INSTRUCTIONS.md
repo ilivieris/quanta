@@ -1,4 +1,4 @@
-# turboRAG — Οδηγίες Εκκίνησης
+﻿# Quanta — Οδηγίες Εκκίνησης
 
 ## Προαπαιτούμενα
 
@@ -13,8 +13,8 @@
 ## Βήμα 1 — Κλωνοποίηση repo
 
 ```bash
-git clone https://github.com/<username>/turboRAG.git
-cd turboRAG
+git clone https://github.com/<username>/Quanta.git
+cd Quanta
 ```
 
 ---
@@ -29,21 +29,21 @@ cp .env.example .env
 
 ```env
 # ── PostgreSQL ──────────────────────────────────────────
-TURBORAG_POSTGRES_HOST=localhost
-TURBORAG_POSTGRES_PORT=5432
-TURBORAG_POSTGRES_DB=turborag
-TURBORAG_POSTGRES_USER=turborag
-TURBORAG_POSTGRES_PASSWORD=ΒΑΛΕ_ΔΙΚΟ_ΣΟΥ_ΚΩΔΙΚΟ
+Quanta_POSTGRES_HOST=localhost
+Quanta_POSTGRES_PORT=5432
+Quanta_POSTGRES_DB=Quanta
+Quanta_POSTGRES_USER=Quanta
+Quanta_POSTGRES_PASSWORD=ΒΑΛΕ_ΔΙΚΟ_ΣΟΥ_ΚΩΔΙΚΟ
 
 # ── Neo4j (προαιρετικό — άφησε κενό αν δεν χρησιμοποιείς γράφο) ──
-TURBORAG_NEO4J_URI=bolt://localhost:7687
-TURBORAG_NEO4J_USER=neo4j
-TURBORAG_NEO4J_PASSWORD=ΒΑΛΕ_ΔΙΚΟ_ΣΟΥ_ΚΩΔΙΚΟ
-TURBORAG_NEO4J_DATABASE=neo4j
+Quanta_NEO4J_URI=bolt://localhost:7687
+Quanta_NEO4J_USER=neo4j
+Quanta_NEO4J_PASSWORD=ΒΑΛΕ_ΔΙΚΟ_ΣΟΥ_ΚΩΔΙΚΟ
+Quanta_NEO4J_DATABASE=neo4j
 
 # ── Index defaults ───────────────────────────────────────
-TURBORAG_DEFAULT_BIT_WIDTH=4
-TURBORAG_DEFAULT_TOP_K=10
+Quanta_DEFAULT_BIT_WIDTH=4
+Quanta_DEFAULT_TOP_K=10
 ```
 
 > ⚠️ Μην βάλεις ποτέ το `.env` στο git. Είναι ήδη στο `.gitignore`.
@@ -128,7 +128,7 @@ pip install -e ".[llama-index,neo4j,dev]"
 ## Βήμα 6 — Επαλήθευση εγκατάστασης
 
 ```bash
-python -c "import turborag; print('OK')"
+python -c "import quanta; print('OK')"
 ```
 
 ---
@@ -148,11 +148,11 @@ pytest tests/ -v
 ```python
 import asyncio
 import numpy as np
-from turborag import TurboIndex
-from turborag.docstore import DocStore
-from turborag.config import get_settings
-from turborag.retriever import HybridRetriever
-from turborag.graph import get_graph_backend
+from Quanta import QuantaIndex
+from quanta.docstore import DocStore
+from quanta.config import get_settings
+from quanta.retriever import MultiRetriever
+from quanta.graph import get_graph_backend
 
 async def main():
     settings = get_settings()  # φορτώνει από .env
@@ -162,14 +162,14 @@ async def main():
     await docstore.init()  # δημιουργεί tables αν δεν υπάρχουν
 
     # Vector indexes
-    text_index  = TurboIndex(name="text",   dim=768)
-    image_index = TurboIndex(name="images", dim=800)
+    text_index  = QuantaIndex(name="text",   dim=768)
+    image_index = QuantaIndex(name="images", dim=800)
 
     # Graph backend (NullGraph αν δεν έχεις Neo4j)
     graph = get_graph_backend(settings)
 
     # Retriever
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": text_index, "images": image_index},
         docstore=docstore,
         graph=graph,
@@ -200,9 +200,9 @@ asyncio.run(main())
 
 ```python
 from llama_index.core import VectorStoreIndex, StorageContext
-from turborag.integrations.llama_index import TurboRAGVectorStore
+from quanta.integrations.llama_index import QuantaVectorStore
 
-vector_store = TurboRAGVectorStore(
+vector_store = QuantaVectorStore(
     index=text_index,
     docstore=docstore,
 )
@@ -258,13 +258,13 @@ docker compose restart postgres
 
 ```bash
 # Ruff
-ruff check turborag/
+ruff check Quanta/
 
 # Mypy
-mypy turborag/
+mypy Quanta/
 
 # Και τα δύο μαζί
-ruff check turborag/ && mypy turborag/
+ruff check Quanta/ && mypy Quanta/
 ```
 
 ---
@@ -275,12 +275,12 @@ ruff check turborag/ && mypy turborag/
 → Βεβαιώσου ότι τρέχει: `docker compose ps`
 → Περίμενε 5-10 δευτερόλεπτα μετά το `docker compose up`
 
-**`ModuleNotFoundError: turborag`**
+**`ModuleNotFoundError: Quanta`**
 → Βεβαιώσου ότι το venv είναι ενεργό: `source .venv/bin/activate`
 → Μετά τρέξε `pip install -e .` μέσα στον φάκελο του repo
 
-**`TurboRAGError: Neo4j not configured`**
-→ Φυσιολογικό αν δεν έχεις ορίσει `TURBORAG_NEO4J_URI` — το σύστημα πέφτει σε NullGraph αυτόματα
+**`QuantaError: Neo4j not configured`**
+→ Φυσιολογικό αν δεν έχεις ορίσει `Quanta_NEO4J_URI` — το σύστημα πέφτει σε NullGraph αυτόματα
 
 **turbovec compilation error κατά την εγκατάσταση**
 → Χρειάζεσαι Rust toolchain: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`

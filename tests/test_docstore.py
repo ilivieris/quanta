@@ -1,4 +1,4 @@
-"""Tests for turborag.docstore.DocStore.
+﻿"""Tests for Quanta.docstore.DocStore.
 
 asyncpg is mocked at the pool level — no PostgreSQL instance required.
 """
@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from turborag.exceptions import TurboRAGError
-from turborag.types import ChunkRecord
+from quanta.exceptions import QuantaError
+from quanta.types import ChunkRecord
 
 
 # ── asyncpg pool / connection mock helpers ────────────────────────────────────
@@ -51,10 +51,10 @@ def mock_pool(mock_conn):
 @pytest.fixture
 def docstore(mock_pool):
     """DocStore with pool injected, bypassing real init()."""
-    from turborag.config import TurboRAGSettings
-    from turborag.docstore import DocStore
+    from quanta.config import QuantaSettings
+    from quanta.docstore import DocStore
 
-    settings = TurboRAGSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
+    settings = QuantaSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
     ds = DocStore(settings)
     ds._pool = mock_pool
     return ds
@@ -63,13 +63,13 @@ def docstore(mock_pool):
 # ── init ──────────────────────────────────────────────────────────────────────
 
 async def test_init_creates_pool_and_tables(mock_pool):
-    from turborag.config import TurboRAGSettings
-    from turborag.docstore import DocStore
+    from quanta.config import QuantaSettings
+    from quanta.docstore import DocStore
 
-    settings = TurboRAGSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
+    settings = QuantaSettings(POSTGRES_USER="test", POSTGRES_PASSWORD="test")
     ds = DocStore(settings)
 
-    with patch("turborag.docstore.asyncpg.create_pool", AsyncMock(return_value=mock_pool)):
+    with patch("Quanta.docstore.asyncpg.create_pool", AsyncMock(return_value=mock_pool)):
         await ds.init()
 
     assert ds._pool is mock_pool
@@ -89,7 +89,7 @@ async def test_add_document_wraps_postgres_error(docstore, mock_conn):
     import asyncpg
 
     mock_conn.execute.side_effect = asyncpg.PostgresError("boom")
-    with pytest.raises(TurboRAGError, match="add_document"):
+    with pytest.raises(QuantaError, match="add_document"):
         await docstore.add_document("id-1", "text", "text")
 
 

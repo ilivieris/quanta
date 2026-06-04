@@ -1,12 +1,12 @@
-"""LlamaIndex VectorStore integration for TurboRAG.
+﻿"""LlamaIndex VectorStore integration for Quanta.
 
 Usage::
 
-    from turborag import HybridRetriever, TurboIndex, DocStore
-    from turborag.integrations.llama_index import TurboRAGVectorStore
+    from Quanta import MultiRetriever, QuantaIndex, DocStore
+    from quanta.integrations.llama_index import QuantaVectorStore
     from llama_index.core import VectorStoreIndex, StorageContext
 
-    store = TurboRAGVectorStore(
+    store = QuantaVectorStore(
         retriever=retriever,
         index_name="text",
         embed_dim=1536,
@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from turborag.exceptions import TurboRAGError
-from turborag.retriever import HybridRetriever
-from turborag.utils.logging import get_logger
+from quanta.exceptions import QuantaError
+from quanta.retriever import MultiRetriever
+from quanta.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -31,12 +31,12 @@ def _require_llama_index() -> None:
         import llama_index.core  # noqa: F401
     except ImportError as exc:
         raise ImportError(
-            "llama-index-core is required. Install it with: pip install turborag[llama-index]"
+            "llama-index-core is required. Install it with: pip install quanta[llama-index]"
         ) from exc
 
 
-class TurboRAGVectorStore:
-    """LlamaIndex-compatible ``VectorStore`` backed by a :class:`HybridRetriever`.
+class QuantaVectorStore:
+    """LlamaIndex-compatible ``VectorStore`` backed by a :class:`MultiRetriever`.
 
     Write path (``async_add`` / ``adelete``):
       Writes chunks directly to the retriever's ``docstore`` and vectors to
@@ -51,13 +51,13 @@ class TurboRAGVectorStore:
 
     def __init__(
         self,
-        retriever: HybridRetriever,
+        retriever: MultiRetriever,
         index_name: str,
         embed_dim: int,
     ) -> None:
         _require_llama_index()
         if index_name not in retriever.indexes:
-            raise TurboRAGError(
+            raise QuantaError(
                 f"index_name={index_name!r} not found in retriever. "
                 f"Available: {list(retriever.indexes)}"
             )
@@ -78,12 +78,12 @@ class TurboRAGVectorStore:
         for raw_node in nodes:
             node: TextNode = cast(TextNode, raw_node)
             if node.embedding is None:
-                raise TurboRAGError(
+                raise QuantaError(
                     f"Node {node.node_id!r} has no embedding — run an embedder before adding."
                 )
             chunk_id = node.node_id or None
             if chunk_id is None:
-                raise TurboRAGError("LlamaIndex node is missing a node_id.")
+                raise QuantaError("LlamaIndex node is missing a node_id.")
 
             document_id = node.ref_doc_id or chunk_id
             chunk_index: int = node.metadata.get("chunk_index", 0)
@@ -106,7 +106,7 @@ class TurboRAGVectorStore:
             ids.append(chunk_id)
 
         logger.info(
-            "TurboRAGVectorStore[%s] added %d node(s)", self._index_name, len(ids)
+            "QuantaVectorStore[%s] added %d node(s)", self._index_name, len(ids)
         )
         return ids
 
@@ -120,7 +120,7 @@ class TurboRAGVectorStore:
             await self._retriever.docstore.delete_document(chunk.id)
             idx.remove(chunk.id)
         logger.info(
-            "TurboRAGVectorStore[%s] deleted %d chunk(s) for doc %r",
+            "QuantaVectorStore[%s] deleted %d chunk(s) for doc %r",
             self._index_name,
             len(chunks),
             ref_doc_id,
@@ -132,7 +132,7 @@ class TurboRAGVectorStore:
         from llama_index.core.vector_stores.types import VectorStoreQueryResult
 
         if query.query_embedding is None:
-            raise TurboRAGError("VectorStoreQuery must include query_embedding.")
+            raise QuantaError("VectorStoreQuery must include query_embedding.")
 
         results = await self._retriever.search(
             query_vectors={self._index_name: query.query_embedding},
@@ -159,7 +159,7 @@ class TurboRAGVectorStore:
 
     # Synchronous stubs — LlamaIndex requires them even when only async is used.
     def add(self, nodes: list[Any], **kwargs: Any) -> list[str]:  # noqa: ARG002
-        raise NotImplementedError("Use async_add for TurboRAGVectorStore.")
+        raise NotImplementedError("Use async_add for QuantaVectorStore.")
 
     def query(self, query: Any, **kwargs: Any) -> Any:  # noqa: ARG002
-        raise NotImplementedError("Use aquery for TurboRAGVectorStore.")
+        raise NotImplementedError("Use aquery for QuantaVectorStore.")

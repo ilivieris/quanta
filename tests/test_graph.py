@@ -1,4 +1,4 @@
-"""Tests for turborag.graph — NullGraph and Neo4jGraph."""
+﻿"""Tests for Quanta.graph — NullGraph and Neo4jGraph."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from turborag.exceptions import TurboRAGError
-from turborag.graph import NullGraph, get_graph_backend
-from turborag.types import GraphNode
+from quanta.exceptions import QuantaError
+from quanta.graph import NullGraph, get_graph_backend
+from quanta.types import GraphNode
 
 
 # ── NullGraph ─────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ def neo4j_mock():
     mock_gdb.driver.return_value = mock_driver
 
     with patch.dict(sys.modules, {"neo4j": MagicMock(GraphDatabase=mock_gdb)}):
-        from turborag.graph import Neo4jGraph
+        from quanta.graph import Neo4jGraph
 
         graph = Neo4jGraph(
             uri="bolt://localhost:7687",
@@ -130,7 +130,7 @@ def test_neo4j_graph_upsert_edge_valid(neo4j_mock):
 
 def test_neo4j_graph_upsert_edge_invalid_rel_type_raises(neo4j_mock):
     graph, *_ = neo4j_mock
-    with pytest.raises(TurboRAGError, match="identifier"):
+    with pytest.raises(QuantaError, match="identifier"):
         graph.upsert_edge("a", "b", "bad rel type!")
 
 
@@ -149,16 +149,16 @@ def test_neo4j_graph_close_calls_driver_close(neo4j_mock):
 
 def test_neo4j_hops_validation_raises(neo4j_mock):
     graph, *_ = neo4j_mock
-    with pytest.raises(TurboRAGError, match="hops"):
+    with pytest.raises(QuantaError, match="hops"):
         graph.expand(["id-1"], hops=0)
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 def test_get_graph_backend_returns_null_when_unconfigured():
-    from turborag.config import TurboRAGSettings
+    from quanta.config import QuantaSettings
 
-    settings = TurboRAGSettings(
+    settings = QuantaSettings(
         POSTGRES_USER="u", POSTGRES_PASSWORD="p",
         NEO4J_URI=None, NEO4J_USER=None, NEO4J_PASSWORD=None,
     )
@@ -167,15 +167,15 @@ def test_get_graph_backend_returns_null_when_unconfigured():
 
 
 def test_get_graph_backend_returns_neo4j_when_configured(monkeypatch):
-    from turborag.config import TurboRAGSettings
+    from quanta.config import QuantaSettings
 
     mock_gdb = MagicMock()
     mock_gdb.driver.return_value = MagicMock()
 
     with patch.dict(sys.modules, {"neo4j": MagicMock(GraphDatabase=mock_gdb)}):
-        from turborag.graph import Neo4jGraph
+        from quanta.graph import Neo4jGraph
 
-        settings = TurboRAGSettings(
+        settings = QuantaSettings(
             POSTGRES_USER="u",
             POSTGRES_PASSWORD="p",
             NEO4J_URI="bolt://localhost:7687",

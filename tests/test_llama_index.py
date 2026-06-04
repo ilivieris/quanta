@@ -1,4 +1,4 @@
-"""Tests for turborag.integrations.llama_index.TurboRAGVectorStore.
+﻿"""Tests for Quanta.integrations.llama_index.QuantaVectorStore.
 
 llama_index is mocked via sys.modules so the tests run without the package
 being installed.
@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from turborag.exceptions import TurboRAGError
-from turborag.graph import NullGraph
-from turborag.retriever import HybridRetriever
-from turborag.types import ChunkRecord, RetrievalResult, SearchResult
+from quanta.exceptions import QuantaError
+from quanta.graph import NullGraph
+from quanta.retriever import MultiRetriever
+from quanta.types import ChunkRecord, RetrievalResult, SearchResult
 
 
 # ── Fake llama_index stubs ────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ def _make_mock_index(hits: list[SearchResult] | None = None) -> MagicMock:
 @pytest.fixture
 def retriever(mock_docstore):
     mock_idx = _make_mock_index()
-    r = HybridRetriever(
+    r = MultiRetriever(
         indexes={"text": mock_idx},
         docstore=mock_docstore,
         graph=NullGraph(),
@@ -103,22 +103,22 @@ def retriever(mock_docstore):
 
 @pytest.fixture
 def vector_store(retriever):
-    from turborag.integrations.llama_index import TurboRAGVectorStore
+    from quanta.integrations.llama_index import QuantaVectorStore
 
     r, idx, ds = retriever
-    return TurboRAGVectorStore(retriever=r, index_name="text", embed_dim=DIM)
+    return QuantaVectorStore(retriever=r, index_name="text", embed_dim=DIM)
 
 
 # ── Constructor ───────────────────────────────────────────────────────────────
 
 def test_invalid_index_name_raises(mock_docstore):
-    from turborag.integrations.llama_index import TurboRAGVectorStore
+    from quanta.integrations.llama_index import QuantaVectorStore
 
     idx = _make_mock_index()
-    r = HybridRetriever(indexes={"text": idx}, docstore=mock_docstore, graph=NullGraph())
+    r = MultiRetriever(indexes={"text": idx}, docstore=mock_docstore, graph=NullGraph())
 
-    with pytest.raises(TurboRAGError, match="index_name"):
-        TurboRAGVectorStore(retriever=r, index_name="nonexistent", embed_dim=DIM)
+    with pytest.raises(QuantaError, match="index_name"):
+        QuantaVectorStore(retriever=r, index_name="nonexistent", embed_dim=DIM)
 
 
 # ── async_add ─────────────────────────────────────────────────────────────────
@@ -152,14 +152,14 @@ async def test_async_add_persists_chunk_and_vector(vector_store, retriever):
 
 async def test_async_add_missing_embedding_raises(vector_store):
     node = FakeTextNode(node_id="ch-1", embedding=None)
-    with pytest.raises(TurboRAGError, match="embedding"):
+    with pytest.raises(QuantaError, match="embedding"):
         await vector_store.async_add([node])
 
 
 async def test_async_add_missing_node_id_raises(vector_store):
     node = FakeTextNode(node_id=None, embedding=[0.1] * DIM)  # type: ignore[arg-type]
     node.node_id = None
-    with pytest.raises(TurboRAGError, match="node_id"):
+    with pytest.raises(QuantaError, match="node_id"):
         await vector_store.async_add([node])
 
 
@@ -212,11 +212,11 @@ async def test_aquery_delegates_to_search(vector_store, retriever):
 
 
 async def test_aquery_missing_embedding_raises(vector_store):
-    from turborag.exceptions import TurboRAGError
+    from quanta.exceptions import QuantaError
 
     query = FakeQuery(embedding=None, top_k=3)  # type: ignore[arg-type]
     query.query_embedding = None
-    with pytest.raises(TurboRAGError, match="query_embedding"):
+    with pytest.raises(QuantaError, match="query_embedding"):
         await vector_store.aquery(query)
 
 

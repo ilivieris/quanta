@@ -1,13 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
 from typing import Any
 
-from turborag.config import TurboRAGSettings
-from turborag.exceptions import TurboRAGError
-from turborag.types import GraphNode
-from turborag.utils.logging import get_logger
+from quanta.config import QuantaSettings
+from quanta.exceptions import QuantaError
+from quanta.types import GraphNode
+from quanta.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -18,7 +18,7 @@ _SAFE_REL_TYPE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 def _validate_rel_type(rel_type: str) -> str:
     if not _SAFE_REL_TYPE.match(rel_type):
-        raise TurboRAGError(
+        raise QuantaError(
             f"rel_type must be an upper-case Cypher identifier (e.g. RELATED_TO), "
             f"got: {rel_type!r}"
         )
@@ -27,7 +27,7 @@ def _validate_rel_type(rel_type: str) -> str:
 
 def _validate_hops(hops: int) -> int:
     if not isinstance(hops, int) or hops < 1:
-        raise TurboRAGError(f"hops must be a positive integer, got {hops!r}")
+        raise QuantaError(f"hops must be a positive integer, got {hops!r}")
     return hops
 
 
@@ -110,8 +110,8 @@ class Neo4jGraph(GraphBackend):
         try:
             from neo4j import GraphDatabase  # type: ignore[attr-defined]
         except ImportError as exc:
-            raise TurboRAGError(
-                "neo4j driver is required. Install it with: pip install turborag[neo4j]"
+            raise QuantaError(
+                "neo4j driver is required. Install it with: pip install quanta[neo4j]"
             ) from exc
 
         self._database = database
@@ -125,7 +125,7 @@ class Neo4jGraph(GraphBackend):
             with self._driver.session(database=self._database) as session:
                 return session.run(query, **params).data()  # type: ignore[no-any-return]
         except Exception as exc:
-            raise TurboRAGError(f"Neo4j query failed: {exc}") from exc
+            raise QuantaError(f"Neo4j query failed: {exc}") from exc
 
     # ── GraphBackend interface ────────────────────────────────────────────────
 
@@ -256,7 +256,7 @@ class Neo4jGraph(GraphBackend):
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
-def get_graph_backend(config: TurboRAGSettings) -> GraphBackend:
+def get_graph_backend(config: QuantaSettings) -> GraphBackend:
     """Return a configured :class:`Neo4jGraph` when Neo4j is available, otherwise
     a :class:`NullGraph` that silently no-ops every call."""
     if config.graph_configured:

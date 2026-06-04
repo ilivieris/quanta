@@ -1,14 +1,14 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from typing import Any
 
 import asyncpg
 
-from turborag.config import TurboRAGSettings
-from turborag.exceptions import TurboRAGError
-from turborag.types import ChunkRecord, DocumentRecord
-from turborag.utils.logging import get_logger
+from quanta.config import QuantaSettings
+from quanta.exceptions import QuantaError
+from quanta.types import ChunkRecord, DocumentRecord
+from quanta.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -82,7 +82,7 @@ def _row_to_chunk(row: asyncpg.Record) -> ChunkRecord:
 class DocStore:
     """Async PostgreSQL-backed document and chunk store using raw asyncpg."""
 
-    def __init__(self, settings: TurboRAGSettings) -> None:
+    def __init__(self, settings: QuantaSettings) -> None:
         self._settings = settings
         self._pool: asyncpg.Pool | None = None
 
@@ -105,7 +105,7 @@ class DocStore:
                 await conn.execute(_CREATE_TABLES)
                 await conn.execute(_CREATE_INDEXES)
         except (asyncpg.PostgresError, OSError) as exc:
-            raise TurboRAGError(f"DocStore.init failed: {exc}") from exc
+            raise QuantaError(f"DocStore.init failed: {exc}") from exc
         logger.info("DocStore initialised (pool max_size=%d)", self._settings.POSTGRES_POOL_SIZE)
 
     async def close(self) -> None:
@@ -137,7 +137,7 @@ class DocStore:
                     id, content, doc_type, metadata or {},
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"add_document failed for id={id!r}: {exc}") from exc
+            raise QuantaError(f"add_document failed for id={id!r}: {exc}") from exc
 
     async def get_document(self, id: str) -> DocumentRecord | None:
         try:
@@ -148,7 +148,7 @@ class DocStore:
                     id,
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"get_document failed for id={id!r}: {exc}") from exc
+            raise QuantaError(f"get_document failed for id={id!r}: {exc}") from exc
         return _row_to_document(row) if row else None
 
     async def get_documents(self, ids: list[str]) -> list[DocumentRecord]:
@@ -163,7 +163,7 @@ class DocStore:
                     ids,
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"get_documents failed: {exc}") from exc
+            raise QuantaError(f"get_documents failed: {exc}") from exc
         return [_row_to_document(r) for r in rows]
 
     async def delete_document(self, id: str) -> None:
@@ -172,7 +172,7 @@ class DocStore:
             async with self._pool.acquire() as conn:  # type: ignore[union-attr]
                 await conn.execute("DELETE FROM ts_documents WHERE id = $1", id)
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"delete_document failed for id={id!r}: {exc}") from exc
+            raise QuantaError(f"delete_document failed for id={id!r}: {exc}") from exc
 
     # ── Chunk operations ──────────────────────────────────────────────────────
 
@@ -199,7 +199,7 @@ class DocStore:
                     id, document_id, content, chunk_index, metadata or {},
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"add_chunk failed for id={id!r}: {exc}") from exc
+            raise QuantaError(f"add_chunk failed for id={id!r}: {exc}") from exc
 
     async def add_chunks_bulk(self, chunks: list[ChunkRecord]) -> None:
         """Insert *chunks* in a single INSERT … VALUES statement."""
@@ -223,7 +223,7 @@ class DocStore:
             async with self._pool.acquire() as conn:  # type: ignore[union-attr]
                 await conn.execute(query, *args)
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"add_chunks_bulk failed ({len(chunks)} chunks): {exc}") from exc
+            raise QuantaError(f"add_chunks_bulk failed ({len(chunks)} chunks): {exc}") from exc
 
     async def get_chunk(self, id: str) -> ChunkRecord | None:
         try:
@@ -234,7 +234,7 @@ class DocStore:
                     id,
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"get_chunk failed for id={id!r}: {exc}") from exc
+            raise QuantaError(f"get_chunk failed for id={id!r}: {exc}") from exc
         return _row_to_chunk(row) if row else None
 
     async def get_chunks(self, ids: list[str]) -> list[ChunkRecord]:
@@ -249,7 +249,7 @@ class DocStore:
                     ids,
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"get_chunks failed: {exc}") from exc
+            raise QuantaError(f"get_chunks failed: {exc}") from exc
         return [_row_to_chunk(r) for r in rows]
 
     async def filter_chunks(self, filters: dict[str, Any]) -> list[ChunkRecord]:
@@ -266,11 +266,11 @@ class DocStore:
                     filters,
                 )
         except asyncpg.PostgresError as exc:
-            raise TurboRAGError(f"filter_chunks failed (filters={filters!r}): {exc}") from exc
+            raise QuantaError(f"filter_chunks failed (filters={filters!r}): {exc}") from exc
         return [_row_to_chunk(r) for r in rows]
 
     # ── Internal guard ────────────────────────────────────────────────────────
 
     def _assert_ready(self) -> None:
         if self._pool is None:
-            raise TurboRAGError("DocStore is not initialised. Call await init() first.")
+            raise QuantaError("DocStore is not initialised. Call await init() first.")

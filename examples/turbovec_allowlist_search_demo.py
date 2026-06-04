@@ -1,4 +1,4 @@
-"""
+﻿"""
 turbovec · Allowlist-Filtered Search Demo
 ==========================================
 
@@ -12,7 +12,7 @@ Demonstrates: IdMapIndex.search(allowed_ids=[...])
 Prerequisites
 ─────────────
   .env with EMBED_MODEL
-  pip install turborag sentence-transformers
+  pip install Quanta sentence-transformers
 """
 
 import logging
@@ -22,8 +22,8 @@ import time
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from turborag import TurboIndex
-from turborag.config import get_settings
+from Quanta import QuantaIndex
+from quanta.config import get_settings
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
@@ -157,9 +157,9 @@ def main() -> None:
         log.debug("embed() %d texts → shape=%s", len(texts), vecs.shape)
         return vecs
 
-    # ── Build TurboIndex ──────────────────────────────────────────────────────
-    log.info("Creating TurboIndex  name=gdpr  dim=%d  bit_width=4", cfg.EMBED_DIM)
-    print("[2/3]  Embedding articles + building TurboIndex …\n")
+    # ── Build QuantaIndex ──────────────────────────────────────────────────────
+    log.info("Creating QuantaIndex  name=gdpr  dim=%d  bit_width=4", cfg.EMBED_DIM)
+    print("[2/3]  Embedding articles + building QuantaIndex …\n")
 
     t0 = time.perf_counter()
     texts = [text for _, _, text in ARTICLES]
@@ -167,14 +167,14 @@ def main() -> None:
     log.info("Batch embed done: shape=%s  elapsed=%.2f s",
              embeddings.shape, time.perf_counter() - t0)
 
-    text_index = TurboIndex(name="gdpr", dim=cfg.EMBED_DIM, bit_width=4)
+    text_index = QuantaIndex(name="gdpr", dim=cfg.EMBED_DIM, bit_width=4)
     ids = [art_id for art_id, _, _ in ARTICLES]
     text_index.add(embeddings, ids)
 
     for art_id, title, _ in ARTICLES:
         print(f"    ✓  {art_id:8s}  {title}")
 
-    log.info("TurboIndex: %d vectors", len(text_index))
+    log.info("QuantaIndex: %d vectors", len(text_index))
     print(f"\n    turbovec IdMapIndex: {len(text_index)} vectors  (dim={cfg.EMBED_DIM}, 4-bit)")
 
     # ── Q3: Allowlist-filtered ANN search ─────────────────────────────────────

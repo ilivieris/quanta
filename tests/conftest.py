@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the TurboRAG test suite.
+﻿"""Shared pytest fixtures for the Quanta test suite.
 
 All tests run without external services.  PostgreSQL and Neo4j are replaced
 by in-process mocks; turbovec is patched via sys.modules.
@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from turborag.graph import NullGraph
-from turborag.types import ChunkRecord, DocumentRecord, SearchResult
+from quanta.graph import NullGraph
+from quanta.types import ChunkRecord, DocumentRecord, SearchResult
 
 
 # ── Basic data fixtures ───────────────────────────────────────────────────────

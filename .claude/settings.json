@@ -17,7 +17,10 @@
       "PowerShell(cd \"C:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\"; $env:PYTHONIOENCODING = \"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe .\\\\kiko.py 2>&1 | Select-String -Pattern \"Q7|save|load|Error|Traceback\" | Select-Object -First 20)",
       "Bash(python -m pytest tests/test_index.py -v --tb=short)",
       "Bash(.venv\\\\Scripts\\\\python.exe -c \"import turbovec; idx = turbovec.IdMapIndex\\(dim=4, bit_width=4\\); print\\([m for m in dir\\(idx\\) if not m.startswith\\('__'\\)]\\)\")",
-      "PowerShell($env:PYTHONIOENCODING='utf-8'; cd \"C:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\"; .\\\\.venv\\\\Scripts\\\\python.exe .\\\\examples\\\\turbovec_allowlist_search_demo.py)"
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; cd \"C:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\"; .\\\\.venv\\\\Scripts\\\\python.exe .\\\\examples\\\\turbovec_allowlist_search_demo.py)",
+      "PowerShell(Rename-Item -Path \"c:\\\\Users\\\\ioann\\\\Repositories\\\\Project under development\\\\turbosearch\\\\turborag\" -NewName \"quanta\" -Confirm:$false)",
+      "Bash(gh api *)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

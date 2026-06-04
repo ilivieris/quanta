@@ -1,4 +1,4 @@
-"""Tests for turborag.retriever.HybridRetriever."""
+﻿"""Tests for Quanta.retriever.MultiRetriever."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from turborag.exceptions import TurboRAGError
-from turborag.graph import NullGraph
-from turborag.retriever import HybridRetriever, _normalize
-from turborag.types import ChunkRecord, GraphNode, RetrievalResult, SearchResult
+from quanta.exceptions import QuantaError
+from quanta.graph import NullGraph
+from quanta.retriever import MultiRetriever, _normalize
+from quanta.types import ChunkRecord, GraphNode, RetrievalResult, SearchResult
 
 DIM = 64  # small dim for test speed
 
@@ -64,7 +64,7 @@ def simple_retriever(mock_docstore, null_graph):
     mock_docstore.get_chunks = AsyncMock(
         return_value=[_make_chunk("ch-0"), _make_chunk("ch-1")]
     )
-    return HybridRetriever(
+    return MultiRetriever(
         indexes={"text": idx},
         docstore=mock_docstore,
         graph=null_graph,
@@ -74,14 +74,14 @@ def simple_retriever(mock_docstore, null_graph):
 # ── Constructor validation ────────────────────────────────────────────────────
 
 def test_empty_indexes_raises(mock_docstore, null_graph):
-    with pytest.raises(TurboRAGError, match="at least one"):
-        HybridRetriever(indexes={}, docstore=mock_docstore, graph=null_graph)
+    with pytest.raises(QuantaError, match="at least one"):
+        MultiRetriever(indexes={}, docstore=mock_docstore, graph=null_graph)
 
 
 def test_bad_dense_weight_raises(mock_docstore, null_graph):
     idx = _make_index([])
-    with pytest.raises(TurboRAGError, match="dense_weight"):
-        HybridRetriever(
+    with pytest.raises(QuantaError, match="dense_weight"):
+        MultiRetriever(
             indexes={"t": idx}, docstore=mock_docstore, graph=null_graph,
             dense_weight=1.5
         )
@@ -89,8 +89,8 @@ def test_bad_dense_weight_raises(mock_docstore, null_graph):
 
 def test_bad_graph_weight_raises(mock_docstore, null_graph):
     idx = _make_index([])
-    with pytest.raises(TurboRAGError, match="graph_weight"):
-        HybridRetriever(
+    with pytest.raises(QuantaError, match="graph_weight"):
+        MultiRetriever(
             indexes={"t": idx}, docstore=mock_docstore, graph=null_graph,
             graph_weight=-0.1
         )
@@ -123,17 +123,17 @@ async def test_search_source_is_dense_without_graph(simple_retriever, query_vec)
 
 async def test_search_unknown_index_name_raises(mock_docstore, null_graph, query_vec):
     idx = _make_index([])
-    retriever = HybridRetriever(indexes={"text": idx}, docstore=mock_docstore, graph=null_graph)
-    with pytest.raises(TurboRAGError, match="No index registered"):
+    retriever = MultiRetriever(indexes={"text": idx}, docstore=mock_docstore, graph=null_graph)
+    with pytest.raises(QuantaError, match="No index registered"):
         await retriever.search({"images": query_vec})
 
 
 async def test_search_missing_query_vector_raises(mock_docstore, null_graph, query_vec):
     idx = _make_index([])
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx, "images": idx}, docstore=mock_docstore, graph=null_graph
     )
-    with pytest.raises(TurboRAGError, match="No query vector"):
+    with pytest.raises(QuantaError, match="No query vector"):
         await retriever.search({"text": query_vec}, index_names=["text", "images"])
 
 
@@ -153,7 +153,7 @@ async def test_merge_scores_across_two_indexes(mock_docstore, null_graph, query_
         _make_chunk("shared"), _make_chunk("text-only"), _make_chunk("img-only"),
     ])
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx_text, "images": idx_img},
         docstore=mock_docstore,
         graph=null_graph,
@@ -174,11 +174,11 @@ async def test_graph_weight_zero_equals_dense_only(mock_docstore, null_graph, qu
     idx = _make_index([SearchResult(id="ch-0", score=0.9)])
     mock_docstore.get_chunks = AsyncMock(return_value=[_make_chunk("ch-0")])
 
-    r_no_graph = HybridRetriever(
+    r_no_graph = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph,
         graph_weight=0.0
     )
-    r_use_graph = HybridRetriever(
+    r_use_graph = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph,
         graph_weight=0.0
     )
@@ -202,7 +202,7 @@ async def test_graph_expanded_ids_get_graph_source(mock_docstore, query_vec):
         _make_chunk("graph-only-id"),
     ])
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx},
         docstore=mock_docstore,
         graph=mock_graph,
@@ -224,7 +224,7 @@ async def test_dense_plus_graph_source_tag(mock_docstore, query_vec):
 
     mock_docstore.get_chunks = AsyncMock(return_value=[_make_chunk("ch-0")])
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx},
         docstore=mock_docstore,
         graph=mock_graph,
@@ -241,7 +241,7 @@ async def test_filters_call_filter_chunks(mock_docstore, null_graph, query_vec):
     idx = _make_index([])
     mock_docstore.filter_chunks = AsyncMock(return_value=[])
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
     )
     await retriever.search({"text": query_vec}, filters={"year": 2024})
@@ -253,7 +253,7 @@ async def test_filters_no_chunks_returns_empty(mock_docstore, null_graph, query_
     idx = _make_index([SearchResult(id="ch-0", score=0.9)])
     mock_docstore.filter_chunks = AsyncMock(return_value=[])  # nothing matches filter
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
     )
     results = await retriever.search({"text": query_vec}, filters={"tag": "missing"})
@@ -262,14 +262,14 @@ async def test_filters_no_chunks_returns_empty(mock_docstore, null_graph, query_
 
 async def test_filters_allowed_ids_passed_to_index(mock_docstore, null_graph, query_vec):
     idx = _make_index([SearchResult(id="ch-1", score=0.9)])
-    from turborag.types import ChunkRecord
+    from quanta.types import ChunkRecord
 
     mock_docstore.filter_chunks = AsyncMock(
         return_value=[ChunkRecord(id="ch-1", document_id="d", content="c", chunk_index=0)]
     )
     mock_docstore.get_chunks = AsyncMock(return_value=[_make_chunk("ch-1")])
 
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
     )
     await retriever.search({"text": query_vec}, filters={"tag": "x"})
@@ -283,7 +283,7 @@ async def test_filters_allowed_ids_passed_to_index(mock_docstore, null_graph, qu
 
 def test_navigate_delegates_to_graph(mock_docstore, null_graph):
     idx = _make_index([])
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
     )
     result = retriever.navigate("start-id", relation_type=None, hops=2)
@@ -296,7 +296,7 @@ def test_navigate_passes_relation_type(mock_docstore, query_vec):
     mock_graph.navigate.return_value = expected
 
     idx = _make_index([])
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=mock_graph
     )
     result = retriever.navigate("doc-1", relation_type="CITES", hops=1)
@@ -308,7 +308,7 @@ def test_navigate_passes_relation_type(mock_docstore, query_vec):
 
 def test_properties_accessible(mock_docstore, null_graph):
     idx = _make_index([])
-    retriever = HybridRetriever(
+    retriever = MultiRetriever(
         indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
     )
     assert retriever.docstore is mock_docstore

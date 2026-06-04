@@ -1,9 +1,9 @@
-[build-system]
+﻿[build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "turborag"
+name = "quanta"
 version = "0.1.0"
 description = "Production-ready vector + graph hybrid search library"
 readme = "README.md"
@@ -47,11 +47,11 @@ dev = [
     "ruff>=0.3",
 ]
 all = [
-    "turborag[neo4j,llama-index]",
+    "quanta[neo4j,llama-index]",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["turborag"]
+packages = ["quanta"]
 
 [tool.ruff]
 target-version = "py310"

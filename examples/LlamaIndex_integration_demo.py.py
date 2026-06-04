@@ -1,10 +1,10 @@
-"""
-LlamaIndex integration demo for TurboRAG.
+﻿"""
+LlamaIndex integration demo for Quanta.
 
 Requires:
     pip install llama-index-core sentence-transformers
 
-EMBED_MODEL and EMBED_DIM are read from .env (or use the defaults in TurboRAGSettings).
+EMBED_MODEL and EMBED_DIM are read from .env (or use the defaults in QuantaSettings).
 """
 import asyncio
 import logging
@@ -16,11 +16,11 @@ from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import VectorStoreQuery
 from sentence_transformers import SentenceTransformer
 
-from turborag import TurboIndex
-from turborag.config import get_settings
-from turborag.docstore import DocStore
-from turborag.integrations.llama_index import TurboRAGVectorStore
-from turborag.retriever import HybridRetriever
+from Quanta import QuantaIndex
+from quanta.config import get_settings
+from quanta.docstore import DocStore
+from quanta.integrations.llama_index import QuantaVectorStore
+from quanta.retriever import MultiRetriever
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ def _build_embed_model(model_name: str) -> BaseEmbedding:
 
 async def main() -> None:
     t_start = time.perf_counter()
-    log.info("=== LlamaIndex + TurboRAG demo starting ===")
+    log.info("=== LlamaIndex + Quanta demo starting ===")
 
     cfg = get_settings()
     log.info("Settings loaded  EMBED_MODEL=%s  EMBED_DIM=%d", cfg.EMBED_MODEL, cfg.EMBED_DIM)
@@ -140,25 +140,25 @@ async def main() -> None:
     Settings.embed_model = embed_model
     log.info("LlamaIndex Settings.embed_model set to _STEmbed")
 
-    # ── TurboRAG infrastructure ───────────────────────────────────────────────
+    # ── Quanta infrastructure ───────────────────────────────────────────────
     log.info("Initialising DocStore (PostgreSQL) …")
     t0 = time.perf_counter()
     docstore = DocStore(cfg)
     await docstore.init()
     log.info("DocStore ready in %.2f s", time.perf_counter() - t0)
 
-    log.info("Creating TurboIndex  name=text  dim=%d  bit_width=4 (default)", cfg.EMBED_DIM)
-    text_index = TurboIndex(name="text", dim=cfg.EMBED_DIM)
+    log.info("Creating QuantaIndex  name=text  dim=%d  bit_width=4 (default)", cfg.EMBED_DIM)
+    text_index = QuantaIndex(name="text", dim=cfg.EMBED_DIM)
 
-    log.info("Building HybridRetriever (no graph — NullGraph)")
-    retriever = HybridRetriever(
+    log.info("Building MultiRetriever (no graph — NullGraph)")
+    retriever = MultiRetriever(
         indexes={"text": text_index},
         docstore=docstore,
     )
 
     # ── LlamaIndex vector store ───────────────────────────────────────────────
-    log.info("Creating TurboRAGVectorStore  index_name=text  embed_dim=%d", cfg.EMBED_DIM)
-    vector_store = TurboRAGVectorStore(
+    log.info("Creating QuantaVectorStore  index_name=text  embed_dim=%d", cfg.EMBED_DIM)
+    vector_store = QuantaVectorStore(
         retriever=retriever,
         index_name="text",
         embed_dim=cfg.EMBED_DIM,
