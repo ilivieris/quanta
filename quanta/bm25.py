@@ -115,8 +115,7 @@ class TantivyBM25(BM25Backend):
         return out
 
     def delete(self, doc_id: str) -> None:
-        term = self._tantivy.Term.from_field_text("id", doc_id)
-        self._writer.delete_term(term)
+        self._writer.delete_documents_by_term("id", doc_id)
 
     def commit(self) -> None:
         self._writer.commit()

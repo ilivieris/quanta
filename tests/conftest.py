@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
+from dotenv import load_dotenv
+load_dotenv()
 
 from quanta.graph import NullGraph
 from quanta.types import ChunkRecord, DocumentRecord, SearchResult
