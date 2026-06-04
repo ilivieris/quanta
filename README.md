@@ -1,230 +1,206 @@
-﻿# Quanta
+# Quanta
 
-Production-ready **hybrid search** library for Python — combines quantised
-vector ANN search (turbovec) with optional Neo4j graph expansion and an async
-PostgreSQL document/chunk store.
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![PyPI](https://img.shields.io/badge/pypi-0.1.0-orange)
+
+Production-ready hybrid retrieval for Python. Combines 4-bit quantised vector
+search (turbovec), optional BM25 full-text search (Tantivy), and optional
+Neo4j graph expansion into a single pipeline with a PostgreSQL or DuckDB
+document store.
+
+![Quanta](./images/quanta.png)
 
 ---
 
-## Features
+## What it does
 
-- **Multi-index ANN search** — query `n` named `QuantaIndex` instances in one
-  call (e.g. `"text"` + `"images"`), scores normalised and merged
-- **Graph expansion** — Neo4j traversal widens recall beyond pure ANN; a
-  `NullGraph` fallback keeps the interface identical when Neo4j is absent
-- **Chunk-level retrieval** — PostgreSQL stores documents and chunks separately;
-  metadata GIN index enables pre-filtered vector search
-- **Quantised vectors** — turbovec `IdMapIndex` with configurable bit-width
-  (1 / 2 / 4 / 8) and xxhash-64 ID mapping
-- **LlamaIndex integration** — drop-in `VectorStore` for `VectorStoreIndex`
-- **Zero-config fallbacks** — `NullGraph`, `NullGraph`, missing `.env` → safe
-  defaults everywhere
-- **Structured logging** — ISO-8601 timestamps, stdlib only
+Quanta retrieves documents using three complementary signals: dense vector
+similarity, BM25 keyword relevance, and graph-structural proximity. Vectors are
+stored as 4-bit quantised integers via turbovec — **8× less memory than
+float32** — without a separate ANN server. The graph is a candidate expander,
+not a scorer: it widens the candidate pool by traversing edges from the top
+dense hits; final ranking is determined by dense + BM25 scores only. Every
+component is optional; `NullGraph`, `NullBM25`, and `NullCache` provide zero-cost
+fallbacks so you adopt features incrementally.
 
 ---
 
 ## Architecture
 
 ```
- Query: {"text": vec, "images": vec}
-              │
-              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     MultiRetriever                         │
-│                                                             │
-│  ┌──────────────────┐     ┌──────────────────┐             │
-│  │   QuantaIndex     │     │   QuantaIndex     │             │
-│  │    "text"        │     │   "images"       │             │
-│  │  turbovec ANN    │     │  turbovec ANN    │             │
-│  │  xxhash-64 IDs   │     │  xxhash-64 IDs   │             │
-│  └────────┬─────────┘     └────────┬─────────┘             │
-│           │  min-max norm           │  min-max norm         │
-│           └────────────┬────────────┘                       │
-│                        │  × (dense_weight / n_indexes)      │
-│                        │  Σ per-index contributions         │
-│                        │                                    │
-│             top graph_seed_k IDs                            │
-│                        │                                    │
-│                ┌───────▼────────┐                           │
-│                │  GraphBackend  │                           │
-│                │  Neo4jGraph /  │  + graph_weight × g_score │
-│                │  NullGraph     │  (BFS up to hops=N)       │
-│                └───────┬────────┘                           │
-│                        │  final top-k IDs                   │
-│                ┌───────▼────────┐                           │
-│                │    DocStore    │  hydrate chunks            │
-│                │  PostgreSQL    │  (content, metadata,       │
-│                │  asyncpg       │   document_id)             │
-│                └────────────────┘                           │
-└─────────────────────────────────────────────────────────────┘
-              │
-              ▼
- list[RetrievalResult(id, score, source, content, metadata)]
+User query (text embedding + optional query_text)
+    │
+    ├── QuantaIndex("text")   ──┐
+    ├── QuantaIndex("images") ──┼── min-max normalise ──► score_map
+    └── TantivyBM25           ──┘
+                                        │
+              top graph_seed_k IDs ◄────┘
+                        │
+              Neo4jGraph.expand()        ← BFS up to graph_hops steps
+              (candidate expander;       ← adds new doc IDs to pool
+               does not affect dense    ← graph score = graph_weight × 1/dist
+               or BM25 scores)
+                        │
+              Sort all candidates by score, take top-k
+                        │
+              DocStore (PostgreSQL / DuckDB) — hydrate content + metadata
+                        │
+              list[RetrievalResult(id, score, source, content, metadata)]
 ```
+
+Optional components not shown: `RedisCache` (embedding cache), `EmbeddingCache`
+interface, `QuantaVectorStore` (LlamaIndex adapter).
 
 ---
 
 ## Installation
 
 ```bash
-# Core — vector search + document store
-pip install Quanta
-
-# With Neo4j graph support
-pip install "quanta[neo4j]"
-
-# With LlamaIndex integration
-pip install "quanta[llama-index]"
-
-# Everything
-pip install "Quanta[all]"
-
-# Development
-pip install "Quanta[dev]"
+pip install quanta                                # core: vector index + DuckDB docstore
+pip install "quanta[neo4j]"                       # + Neo4j graph expansion
+pip install "quanta[llama-index]"                 # + LlamaIndex VectorStore
+pip install "quanta[cache]"                       # + Redis embedding cache
+pip install "quanta[bm25]"                        # + Tantivy BM25 search
+pip install "quanta[neo4j,llama-index,cache,bm25]" # everything
 ```
+
+| Extra         | Enables                        |
+|---------------|--------------------------------|
+| `neo4j`       | `Neo4jGraph` backend           |
+| `llama-index` | `QuantaVectorStore` adapter    |
+| `cache`       | `RedisCache` embedding cache   |
+| `bm25`        | `TantivyBM25` full-text search |
+| `duckdb`      | Included in core               |
 
 ---
 
-## Docker quickstart
+## Quickstart
 
-```bash
-cp .env.example .env
-# Edit .env — set POSTGRES_USER and POSTGRES_PASSWORD at minimum
-
-# PostgreSQL only
-docker compose up -d postgres
-
-# PostgreSQL + Neo4j (graph-augmented retrieval)
-docker compose --profile graph up -d
-```
-
-Services are healthy when their `healthcheck` passes:
-
-```bash
-docker compose ps          # all services → healthy
-```
-
----
-
-## Environment setup
-
-Copy `.env.example` to `.env` and fill in your values:
-
-```bash
-# PostgreSQL (required)
-POSTGRES_USER=tsuser
-POSTGRES_PASSWORD=changeme
-
-# Neo4j (optional — only needed for graph expansion)
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=changeme_neo4j
-```
-
-All remaining variables have sensible defaults — see the
-[Configuration reference](#configuration-reference) below.
-
----
-
-## Usage examples
-
-### a) Basic: create a QuantaIndex, add vectors, search
+Zero services. No `.env` required (uses `QuantaIndex` directly).
 
 ```python
 import numpy as np
-from Quanta import QuantaIndex
+from quanta import QuantaIndex
 
-# Create a 768-dimensional index (e.g. for sentence-transformers)
-idx = QuantaIndex(name="articles", dim=768, bit_width=4, index_dir="./indexes")
+idx = QuantaIndex(name="docs", dim=768, bit_width=4, index_dir="./indexes")
 
 # Add vectors
 vectors = np.random.rand(100, 768).astype(np.float32)
-ids = [f"chunk-{i}" for i in range(100)]
+ids = [f"doc-{i:03d}" for i in range(100)]
 idx.add(vectors, ids)
 
 # Search
 query = np.random.rand(768).astype(np.float32)
 results = idx.search(query, k=5)
-
 for r in results:
-    print(r.id, r.score)
+    print(r.id, f"{r.score:.4f}")
 
-# Persist to disk
+# Persist and reload
 idx.save()
-
-# Reload later
-idx2 = QuantaIndex.load("articles", index_dir="./indexes")
+idx2 = QuantaIndex.load("docs", index_dir="./indexes")
 ```
 
-### b) Full pipeline: DocStore + MultiRetriever
+**With DuckDB docstore (zero services, full pipeline):**
 
 ```python
-import asyncio
+import asyncio, os
 import numpy as np
-from Quanta import QuantaSettings, DocStore, QuantaIndex, MultiRetriever, NullGraph
+from quanta import QuantaIndex, DuckDBDocStore, MultiRetriever, NullGraph, QuantaSettings
 
 async def main():
-    settings = QuantaSettings()  # reads from .env
+    # POSTGRES_USER and POSTGRES_PASSWORD are always validated — set placeholders
+    os.environ.setdefault("POSTGRES_USER", "_unused_")
+    os.environ.setdefault("POSTGRES_PASSWORD", "_unused_")
+    settings = QuantaSettings(DOCSTORE_BACKEND="duckdb", DUCKDB_PATH="./demo.duckdb")
 
-    # Initialise the document store
-    docstore = DocStore(settings)
+    docstore = DuckDBDocStore(settings)
     await docstore.init()
 
-    # Create a vector index
-    idx = QuantaIndex(name="text", dim=768, index_dir="./indexes")
-    idx.initialize(dimension=768)   # or just construct with dim=
-
-    # Build the retriever (NullGraph = no Neo4j)
+    idx = QuantaIndex(name="text", dim=768)
     retriever = MultiRetriever(
-        indexes={"text": idx},
-        docstore=docstore,
-        graph=NullGraph(),
-        dense_weight=1.0,
+        indexes={"text": idx}, docstore=docstore, graph=NullGraph()
     )
 
-    # Add chunks directly via docstore + index
-    await docstore.add_document("doc-1", "Original document text", "text")
-    await docstore.add_chunk(
-        id="chunk-1",
-        document_id="doc-1",
-        content="First chunk of the document.",
-        chunk_index=0,
-        metadata={"year": 2024, "source": "arxiv"},
-    )
+    await docstore.add_document("doc-1", "Hello world.", "text")
+    await docstore.add_chunk("chunk-1", "doc-1", "Hello world.", 0)
     idx.add(np.random.rand(1, 768).astype(np.float32), ["chunk-1"])
 
-    # Search
     results = await retriever.search(
-        query_vectors={"text": np.random.rand(768).astype(np.float32)},
-        k=5,
+        query_vectors={"text": np.random.rand(768).astype(np.float32)}, k=3
     )
     for r in results:
-        print(f"[{r.score:.3f}] [{r.source}] {r.content}")
+        print(f"[{r.score:.4f}] [{r.source}] {r.content}")
 
     await docstore.close()
 
 asyncio.run(main())
 ```
 
-### c) With Neo4j graph expansion
+---
+
+## Services (Docker)
+
+```bash
+# PostgreSQL only
+docker compose up -d postgres
+
+# PostgreSQL + Neo4j (graph expansion)
+docker compose --profile graph up -d
+
+# PostgreSQL + Redis (embedding cache)
+docker compose --profile cache up -d
+
+# Everything
+docker compose --profile graph --profile cache up -d
+
+# Verify all services are healthy
+docker compose ps
+```
+
+Copy `.env.example` to `.env` and set at minimum `POSTGRES_USER` and
+`POSTGRES_PASSWORD`.
+
+---
+
+## Configuration
+
+See [USER_MANUAL.md](USER_MANUAL.md) for the complete variable reference. The
+five most important variables:
+
+| Variable            | Default      | Description                                      |
+|---------------------|--------------|--------------------------------------------------|
+| `POSTGRES_USER`     | *(required)* | PostgreSQL username                              |
+| `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password                              |
+| `DOCSTORE_BACKEND`  | `"postgres"` | `"postgres"` or `"duckdb"`                       |
+| `NEO4J_URI`         | `None`       | Set to `bolt://localhost:7687` to enable Neo4j   |
+| `REDIS_HOST`        | `None`       | Set to `localhost` to enable embedding cache     |
+
+---
+
+## Graph-Augmented Retrieval
+
+The graph is a **candidate expander**. Dense search finds semantically similar
+documents. Graph traversal finds structurally related documents — ones you know
+are connected because you built the relationships (citations, amendments,
+interpretations).
 
 ```python
 import asyncio
 import numpy as np
-from Quanta import (
-    QuantaSettings, DocStore, QuantaIndex,
-    MultiRetriever, get_graph_backend, Neo4jGraph,
-)
+from quanta import QuantaIndex, DocStore, MultiRetriever, Neo4jGraph, QuantaSettings
 
 async def main():
-    settings = QuantaSettings()   # NEO4J_URI must be set in .env
+    settings = QuantaSettings()
     docstore = DocStore(settings)
     await docstore.init()
 
-    idx = QuantaIndex(name="text", dim=768, index_dir="./indexes")
-
-    # Factory returns Neo4jGraph if NEO4J_URI is set, else NullGraph
-    graph = get_graph_backend(settings)
+    idx = QuantaIndex(name="text", dim=768)
+    graph = Neo4jGraph(
+        uri=settings.NEO4J_URI,
+        user=settings.NEO4J_USER,
+        password=settings.NEO4J_PASSWORD,
+    )
 
     retriever = MultiRetriever(
         indexes={"text": idx},
@@ -234,146 +210,61 @@ async def main():
         graph_weight=0.3,
     )
 
-    # Build the graph (outside the retriever — one-time indexing step)
-    if isinstance(graph, Neo4jGraph):
-        graph.upsert_node("doc-1", {"title": "Paper on RAG"})
-        graph.upsert_node("doc-2", {"title": "Survey on embeddings"})
-        graph.upsert_edge("doc-1", "doc-2", "CITES")
+    # Build graph (one-time indexing step)
+    await graph.upsert_node("doc-1", {"title": "GDPR Article 5"})
+    await graph.upsert_node("doc-2", {"title": "Court Decision 1234/2021"})
+    await graph.upsert_edge("doc-2", "doc-1", "CITES")
 
-    # Hybrid search: ANN + graph expansion up to 2 hops
+    # Hybrid search: dense + 2-hop graph expansion
     results = await retriever.search(
         query_vectors={"text": np.random.rand(768).astype(np.float32)},
         k=10,
         use_graph=True,
         graph_hops=2,
-        graph_seed_k=5,
+        graph_seed_k=3,
     )
     for r in results:
         print(f"[{r.source}] [{r.score:.3f}] {r.id}")
 
     # Direct graph navigation
-    neighbors = retriever.navigate("doc-1", relation_type="CITES", hops=1)
+    neighbors = await retriever.navigate("doc-2", relation_type="CITES", hops=1)
     for n in neighbors:
         print(n.id, n.relation, n.distance)
 
     await docstore.close()
-    graph.close()
+    await graph.close()
 
 asyncio.run(main())
 ```
 
-### d) LlamaIndex integration
+See [examples/graph_search.py](examples/graph_search.py) for a complete
+runnable example.
+
+---
+
+## LlamaIndex
 
 ```python
-import asyncio
-from Quanta import QuantaSettings, DocStore, QuantaIndex, MultiRetriever, NullGraph
 from quanta.integrations.llama_index import QuantaVectorStore
-
 from llama_index.core import VectorStoreIndex, StorageContext
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import Document
 
-async def main():
-    settings = QuantaSettings()
-    docstore = DocStore(settings)
-    await docstore.init()
-
-    idx = QuantaIndex(name="llamaidx", dim=1536, index_dir="./indexes")
-
-    retriever = MultiRetriever(
-        indexes={"llamaidx": idx},
-        docstore=docstore,
-        graph=NullGraph(),
-    )
-
-    # Wrap as a LlamaIndex VectorStore
-    store = QuantaVectorStore(
-        retriever=retriever,
-        index_name="llamaidx",
-        embed_dim=1536,
-    )
-
-    # Use as a standard LlamaIndex storage context
-    storage_ctx = StorageContext.from_defaults(vector_store=store)
-    docs = [Document(text="Quanta makes hybrid search easy.")]
-    li_index = VectorStoreIndex.from_documents(docs, storage_context=storage_ctx)
-
-    # Query
-    engine = li_index.as_query_engine()
-    response = await engine.aquery("What does Quanta do?")
-    print(response)
-
-    await docstore.close()
-
-asyncio.run(main())
+store = QuantaVectorStore(retriever=retriever, index_name="text", embed_dim=768)
+storage_ctx = StorageContext.from_defaults(vector_store=store)
+li_index = VectorStoreIndex(nodes=[], storage_context=storage_ctx)
 ```
 
----
-
-## Configuration reference
-
-All settings are loaded from environment variables (or a `.env` file in the
-working directory). No prefix is required.
-
-| Variable | Default | Description |
-|---|---|---|
-| `POSTGRES_HOST` | `localhost` | PostgreSQL server host |
-| `POSTGRES_PORT` | `5432` | PostgreSQL server port |
-| `POSTGRES_DB` | `Quanta` | Database name |
-| `POSTGRES_USER` | *(required)* | Database username |
-| `POSTGRES_PASSWORD` | *(required)* | Database password |
-| `POSTGRES_POOL_SIZE` | `5` | Max async connection pool size |
-| `NEO4J_URI` | `None` | Neo4j Bolt URI — omit to use `NullGraph` |
-| `NEO4J_USER` | `None` | Neo4j username |
-| `NEO4J_PASSWORD` | `None` | Neo4j password |
-| `NEO4J_DATABASE` | `neo4j` | Neo4j target database |
-| `DEFAULT_BIT_WIDTH` | `4` | turbovec quantisation bit-width (1/2/4/8) |
-| `DEFAULT_TOP_K` | `10` | Default `k` for vector searches |
-
----
-
-## Database schema
-
-Two tables are created automatically on `DocStore.init()`:
-
-```sql
--- Parent documents
-ts_documents (id TEXT PK, content TEXT, doc_type TEXT,
-              metadata JSONB, created_at TIMESTAMPTZ)
-
--- Chunks — searchable units; cascade-delete with parent
-ts_chunks    (id TEXT PK, document_id TEXT FK → ts_documents,
-              content TEXT, chunk_index INT,
-              metadata JSONB, created_at TIMESTAMPTZ)
-```
-
-Indexes created automatically:
-
-| Index | Type | Purpose |
-|---|---|---|
-| `idx_ts_documents_doc_type` | B-tree | Filter by document type |
-| `idx_ts_chunks_document_id` | B-tree | FK join / parent lookup |
-| `idx_ts_chunks_metadata_gin` | GIN | `metadata @> $filter` containment |
+`async_add` stores nodes in the docstore and adds their embeddings to the index.
+`aquery` delegates to `MultiRetriever.search()`.
 
 ---
 
 ## Development
 
 ```bash
-# Install in editable mode with dev extras
-pip install -e ".[dev]"
-
-# Run all tests (no external services needed)
-pytest
-
-# Run a single file
-pytest tests/test_retriever.py -v
-
-# Lint
-ruff check Quanta/
-
-# Type-check
-mypy Quanta/
+pip install -e ".[neo4j,llama-index,cache,bm25,dev]"
+pytest                  # all tests pass without external services
+ruff check quanta/
+mypy quanta/
 ```
 
 ---
