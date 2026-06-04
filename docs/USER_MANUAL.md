@@ -1,5 +1,5 @@
 
-![](../images/cover.png)
+![](./images/cover.png)
 
 <br/>
 

@@ -9,7 +9,7 @@ search (turbovec), optional BM25 full-text search (Tantivy), and optional
 Neo4j graph expansion into a single pipeline with a PostgreSQL or DuckDB
 document store.
 
-![Quanta](./images/quanta.png)
+![Quanta](./docs/images/quanta.png)
 
 ---
 
