@@ -330,6 +330,14 @@ class QuantaIndex:
 
     # ── Dunder ────────────────────────────────────────────────────────────────
 
+    @property
+    def memory_bytes(self) -> int:
+        """Estimated in-process memory: quantised vectors + ID mapping overhead."""
+        n = len(self)
+        vector_bytes = n * self._dim * self._bit_width // 8
+        avg_id_len = sum(len(k) for k in self._str_to_u64) / max(n, 1)
+        return vector_bytes + int(2 * n * (avg_id_len + 8))
+
     def __len__(self) -> int:
         try:
             return len(self._index)
