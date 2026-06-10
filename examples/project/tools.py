@@ -12,7 +12,7 @@ load_dotenv()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "examples"))
 from examples.project.neo4j_connection import Neo4jConnection
 
-from examples.project.indexer import MedicalIndexer
+from examples.project.indexer import ImageIndexer, MedicalIndexer
 
 # ── Read-only write-keyword guard ──────────────────────────────────────────────
 _WRITE_PATTERN = re.compile(
@@ -505,15 +505,92 @@ def run_find_similar_patients(
     return results
 
 
+def run_image_search(
+    image_indexer: ImageIndexer,
+    graph: Neo4jConnection,
+    query: str,
+    query_type: str,
+    k: int = 5,
+    image_type: str | None = None,
+) -> list[dict]:
+    """Search for similar medical images using a text description or an image file path."""
+    if query_type == "image":
+        query_vec = image_indexer.embed_image(query)
+    elif query_type == "text":
+        query_vec = image_indexer.embed_text(query)
+    else:
+        raise ValueError(f"query_type must be 'text' or 'image', got {query_type!r}")
+
+    hits = image_indexer.search(query_vec, k=k, image_type=image_type or None)
+
+    # Enrich with patient name
+    patient_ids = list({h["patient_id"] for h in hits if h.get("patient_id")})
+    if patient_ids:
+        name_rows = graph.query(
+            "MATCH (p:Patient) WHERE p.patientId IN $ids "
+            "RETURN p.patientId AS pid, p.name AS name",
+            parameters={"ids": patient_ids},
+        ) or []
+        name_map = {row["pid"]: row["name"] for row in name_rows}
+        for hit in hits:
+            hit["patient_name"] = name_map.get(hit["patient_id"], "")
+
+    return hits
+
+
+def run_get_patient_images(
+    graph: Neo4jConnection,
+    patient_id: str,
+) -> list[dict]:
+    """Retrieves all medical images linked to a patient."""
+    rows = graph.query(
+        """
+        MATCH (p:Patient {patientId: $pid})-[:HAS_IMAGE]->(img:MedicalImage)
+        RETURN img.imageId      AS image_id,
+               img.filePath     AS file_path,
+               img.imageType    AS image_type,
+               img.modality     AS modality,
+               img.capturedDate AS captured_date,
+               img.description  AS description
+        ORDER BY img.capturedDate
+        """,
+        parameters={"pid": patient_id},
+    ) or []
+
+    return [
+        {
+            "image_id":     row["image_id"],
+            "file_path":    row["file_path"],
+            "image_type":   row["image_type"],
+            "modality":     row["modality"],
+            "captured_date": str(row["captured_date"] or ""),
+            "description":  row["description"],
+        }
+        for row in rows
+    ]
+
+
 def run_doctor_expertise_match(
     indexer: MedicalIndexer,
     graph: Neo4jConnection,
     condition_description: str,
     k: int = 5,
+    hospital_id: str | None = None,
 ) -> list[dict]:
     """Finds the most suitable doctors for a condition using semantic similarity."""
+    allowed_ids: list[str] | None = None
+    if hospital_id is not None:
+        hospital_rows = graph.query(
+            "MATCH (d:Doctor)-[:WORKS_AT]->(h:Hospital {hospitalId: $hospital_id}) "
+            "RETURN d.doctorId AS did",
+            parameters={"hospital_id": hospital_id},
+        ) or []
+        if not hospital_rows:
+            return []
+        allowed_ids = [row["did"] for row in hospital_rows]
+
     query_vec = indexer.embed(condition_description)
-    hits = indexer.search_doctors(query_vec, k=k)
+    hits = indexer.search_doctors(query_vec, k=k, allowed_ids=allowed_ids)
     if not hits:
         return []
 
@@ -523,18 +600,18 @@ def run_doctor_expertise_match(
             """
             MATCH (d:Doctor {doctorId: $did})
             RETURN d.name AS name, d.specialty AS specialty,
-                   d.yearsExp AS years_exp, d.hospitalId AS hospital_id
+                   d.yearsExp AS years_exp, d.hospitals AS hospitals
             """,
             parameters={"did": hit["id"]},
         ) or []
         info = enrich[0] if enrich else {}
         results.append({
-            "doctor_id":   hit["id"],
-            "name":        info.get("name") or hit["display_name"],
-            "specialty":   info.get("specialty"),
-            "years_exp":   info.get("years_exp"),
-            "hospital_id": info.get("hospital_id"),
-            "score":       hit["score"],
+            "doctor_id": hit["id"],
+            "name":      info.get("name") or hit["display_name"],
+            "specialty": info.get("specialty"),
+            "years_exp": info.get("years_exp"),
+            "hospitals": info.get("hospitals") or [],
+            "score":     hit["score"],
         })
     return results
 
@@ -866,8 +943,79 @@ TOOLS: list[dict] = [
                         "description": "Number of doctors to return (default 5).",
                         "default": 5,
                     },
+                    "hospital_id": {
+                        "type": "string",
+                        "description": "Optional hospital ID to restrict search to doctors who work at that hospital.",
+                    },
                 },
                 "required": ["condition_description"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "image_search",
+            "description": (
+                "Searches for similar medical images using either a text description "
+                "(cross-modal text→image) or an image file path (image→image similarity). "
+                "Returns ranked similar images with linked patient IDs and names. "
+                "Use query_type='text' for queries like 'chest X-ray with consolidation'. "
+                "Use query_type='image' when the user provides an image file path. "
+                "Optionally filter by image_type to restrict search to a specific modality."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "For query_type='text': a natural language description of the image to find. "
+                            "For query_type='image': the absolute file path to the query image."
+                        ),
+                    },
+                    "query_type": {
+                        "type": "string",
+                        "enum": ["text", "image"],
+                        "description": "Whether the query is a text description or an image file path.",
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "Number of similar images to return (default 5).",
+                        "default": 5,
+                    },
+                    "image_type": {
+                        "type": "string",
+                        "enum": ["chest_xray", "ct_scan", "pathology"],
+                        "description": (
+                            "Optional: restrict search to a specific image type. "
+                            "Omit to search across all modalities."
+                        ),
+                    },
+                },
+                "required": ["query", "query_type"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_patient_images",
+            "description": (
+                "Retrieves all medical images linked to a specific patient. "
+                "Returns image metadata: type, modality, capture date, file path, and description."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {
+                        "type": "string",
+                        "description": "The patient's unique identifier (patientId).",
+                    },
+                },
+                "required": ["patient_id"],
                 "additionalProperties": False,
             },
         },
@@ -882,6 +1030,7 @@ def dispatch_tool(
     tool_args: dict,
     indexer: MedicalIndexer,
     graph: Neo4jConnection,
+    image_indexer: ImageIndexer | None = None,
 ) -> str:
     """Route a tool call to the correct function and return a JSON string."""
     if tool_name == "semantic_search":
@@ -960,12 +1109,13 @@ def dispatch_tool(
         print(f"[INFO] find_similar_patients → {len(result)} patients | top scores: {[round(r['score'], 3) for r in result[:3]]}")
 
     elif tool_name == "doctor_expertise_match":
-        print(f"[INFO] Running doctor_expertise_match | condition={tool_args['condition_description']!r} k={tool_args.get('k', 5)}")
+        print(f"[INFO] Running doctor_expertise_match | condition={tool_args['condition_description']!r} k={tool_args.get('k', 5)} hospital_id={tool_args.get('hospital_id')!r}")
         result = run_doctor_expertise_match(
             indexer=indexer,
             graph=graph,
             condition_description=tool_args["condition_description"],
             k=tool_args.get("k", 5),
+            hospital_id=tool_args.get("hospital_id"),
         )
         print(f"[INFO] doctor_expertise_match → {len(result)} doctors | {[r['name'] for r in result[:3]]}")
 
@@ -988,13 +1138,43 @@ def dispatch_tool(
         )
         print(f"[INFO] high_risk_patients → {len(result)} patients | top risk scores: {[r['risk_score'] for r in result[:3]]}")
 
+    elif tool_name == "image_search":
+        if image_indexer is None:
+            raise ValueError(
+                "Image indexer not available. "
+                "Run populate_medical_graph.py (without --no-images) and restart the agent."
+            )
+        print(
+            f"[INFO] Running image_search | query_type={tool_args['query_type']!r} "
+            f"query={tool_args['query']!r} k={tool_args.get('k', 5)} "
+            f"image_type={tool_args.get('image_type')!r}"
+        )
+        result = run_image_search(
+            image_indexer=image_indexer,
+            graph=graph,
+            query=tool_args["query"],
+            query_type=tool_args["query_type"],
+            k=tool_args.get("k", 5),
+            image_type=tool_args.get("image_type"),
+        )
+        print(f"[INFO] image_search → {len(result)} images | top scores: {[round(r['score'], 3) for r in result[:3]]}")
+
+    elif tool_name == "get_patient_images":
+        print(f"[INFO] Running get_patient_images | patient_id={tool_args['patient_id']!r}")
+        result = run_get_patient_images(
+            graph=graph,
+            patient_id=tool_args["patient_id"],
+        )
+        print(f"[INFO] get_patient_images → {len(result)} images")
+
     else:
         raise ValueError(
             f"Unknown tool {tool_name!r}. "
             f"Valid tools: semantic_search, cypher_query, fuzzy_name_search, "
             f"graph_expand, comorbidity_search, get_patient_timeline, "
             f"find_similar_patients, doctor_expertise_match, "
-            f"drug_interaction_check, high_risk_patients"
+            f"drug_interaction_check, high_risk_patients, "
+            f"image_search, get_patient_images"
         )
 
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))

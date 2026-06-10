@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shlex
 import time
 import uuid
 
@@ -11,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from examples.project.indexer import MedicalIndexer, build_indexer
+from examples.project.indexer import ImageIndexer, MedicalIndexer, build_image_indexer, build_indexer
 from examples.project.redis_service import REDIS_AVAILABLE, delete_conversation, load_history, save_message
 from examples.project.tools import TOOLS, dispatch_tool
 
@@ -54,6 +56,13 @@ DOCTOR MATCHING
 - doctor_expertise_match: finds the most suitable doctors for a clinical
   condition using semantic similarity on doctor expertise narratives.
 
+IMAGE SEARCH
+- image_search: searches for similar medical images using either a text
+  description (cross-modal text→image) or an image file path
+  (image→image similarity). Supports filtering by image_type.
+- get_patient_images: retrieves all medical images for a specific patient
+  with metadata (modality, capture date, description).
+
 Decision strategy:
 1. NAME RESOLUTION — If the user mentions any name (patient, doctor, or
    diagnosis), always start with fuzzy_name_search to resolve the correct ID
@@ -84,6 +93,15 @@ Decision strategy:
 12. Always present results in Greek if the user writes in Greek.
 13. Never expose raw Cypher, internal IDs, or tool call details in your
     final answer.
+14. IMAGE QUERIES — When the user message contains "[Image attached: PATH]",
+    call image_search with query_type="image" and query=PATH. For text
+    questions about images (e.g., "βρες chest X-rays"), use query_type="text".
+15. PATIENT IMAGES — To list all images of a specific patient, use
+    get_patient_images after resolving the patient ID.
+16. IMAGE DISPLAY — When presenting image results (from image_search or
+    get_patient_images), always include the file_path field as a clickable
+    reference so the user knows exactly which file to open. Format it as:
+    "Αρχείο: <file_path>".
 
 Cypher rules — follow these exactly:
 - Node labels are CASE-SENSITIVE: Patient, Doctor, Diagnosis, Procedure,
@@ -113,12 +131,16 @@ def _build_system_prompt(graph) -> str:
 
 
 class MedicalSearchAgent:
-    def __init__(self, indexer: MedicalIndexer, graph) -> None:
+    def __init__(
+        self,
+        indexer: MedicalIndexer,
+        graph,
+        image_indexer: ImageIndexer | None = None,
+    ) -> None:
         self.indexer = indexer
         self.graph = graph
-        self.client = openai.OpenAI(
-            api_key="..."
-        )
+        self.image_indexer = image_indexer
+        self.client = openai.OpenAI()
         self.model = "gpt-4.1-mini-2025-04-14"
         self.system_prompt = _build_system_prompt(graph)
 
@@ -161,6 +183,7 @@ class MedicalSearchAgent:
                         tool_args=args,
                         indexer=self.indexer,
                         graph=self.graph,
+                        image_indexer=self.image_indexer,
                     )
                 except Exception as exc:
                     result_str = json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -180,10 +203,37 @@ class MedicalSearchAgent:
         return answer
 
 
-# ── REPL ──────────────────────────────────────────────────────────────────────
-
+# ── REPL helpers ──────────────────────────────────────────────────────────────
 
 _SESSION_FILE = os.path.join(os.path.dirname(__file__), ".conversation_id")
+_IMAGE_PREFIX_RE = re.compile(r"^image:\s*(.+)$", re.IGNORECASE)
+
+
+def _parse_image_input(raw: str) -> tuple[str | None, str]:
+    """
+    Parse 'image:PATH [optional text]' from REPL input.
+    Supports quoted paths for paths with spaces.
+    Returns (image_path, text_query) or (None, raw) if no image prefix.
+    """
+    match = _IMAGE_PREFIX_RE.match(raw.strip())
+    if not match:
+        return None, raw
+
+    rest = match.group(1).strip()
+    if rest.startswith('"') or rest.startswith("'"):
+        try:
+            parts = shlex.split(rest)
+            image_path = parts[0]
+            text_query = " ".join(parts[1:])
+        except ValueError:
+            image_path = rest
+            text_query = ""
+    else:
+        parts = rest.split(None, 1)
+        image_path = parts[0]
+        text_query = parts[1] if len(parts) > 1 else ""
+
+    return image_path, text_query or "Βρες παρόμοιες ιατρικές εικόνες και τους συνδεδεμένους ασθενείς."
 
 
 def _load_session_id() -> str:
@@ -223,6 +273,15 @@ def run_repl(agent: MedicalSearchAgent, conversation_id: str | None = None) -> N
 
         if not user_input:
             continue
+
+        # ── image: prefix handling ─────────────────────────────────────────
+        image_path, user_input = _parse_image_input(user_input)
+        if image_path is not None:
+            if not os.path.isfile(image_path):
+                print(f"[Error] Image file not found: {image_path}\n")
+                continue
+            user_input = f"[Image attached: {image_path}]\n{user_input}"
+
         if user_input.lower() == "quit":
             print("Bye.")
             break
@@ -261,5 +320,7 @@ if __name__ == "__main__":
     indexer = build_indexer(uri=args.uri, user=args.user, password=args.password)
     graph = indexer._graph
 
-    agent = MedicalSearchAgent(indexer=indexer, graph=graph)
+    image_indexer = build_image_indexer(graph=graph)
+
+    agent = MedicalSearchAgent(indexer=indexer, graph=graph, image_indexer=image_indexer)
     run_repl(agent, conversation_id=args.conversation_id)

@@ -35,6 +35,27 @@ def _require_llama_index() -> None:
         ) from exc
 
 
+def _translate_filters(li_filters: Any) -> dict[str, Any] | None:
+    """Translate LlamaIndex MetadataFilters to Quanta's dict filter format.
+
+    Only EQ (==) filters map to Quanta's JSONB containment; all others are
+    logged and skipped.
+    """
+    if li_filters is None or not getattr(li_filters, "filters", None):
+        return None
+    result: dict[str, Any] = {}
+    for f in li_filters.filters:
+        if f.operator.value == "==":
+            result[f.key] = f.value
+        else:
+            logger.warning(
+                "QuantaVectorStore: unsupported filter operator %r for key %r — skipped",
+                f.operator.value,
+                f.key,
+            )
+    return result or None
+
+
 class QuantaVectorStore:
     """LlamaIndex-compatible ``VectorStore`` backed by a :class:`MultiRetriever`.
 
@@ -142,6 +163,7 @@ class QuantaVectorStore:
         results = await self._retriever.search(
             query_vectors={self._index_name: query.query_embedding},
             k=query.similarity_top_k,
+            filters=_translate_filters(getattr(query, "filters", None)),
         )
 
         nodes_with_scores = [

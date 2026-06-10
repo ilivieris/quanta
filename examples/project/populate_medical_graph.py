@@ -387,20 +387,47 @@ def _build_patient_summary(
 # Schema constraints & indexes
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Image type configuration ──────────────────────────────────────────────────
+
+# medmnist dataset → (description, modality)
+_IMAGE_TYPE_META: dict[str, dict] = {
+    "chest_xray": {"description": "Chest X-ray",         "modality": "X-Ray",     "dataset": "ChestMNIST"},
+    "ct_scan":    {"description": "CT scan",              "modality": "CT",        "dataset": "OrganAMNIST"},
+    "pathology":  {"description": "Histopathology slide", "modality": "Microscopy","dataset": "PathMNIST"},
+}
+
+# ICD code → preferred image type for random assignment
+_DIAG_TO_IMAGE_TYPE: dict[str, str] = {
+    "I10": "chest_xray",  # hypertension
+    "E11": "ct_scan",     # diabetes
+    "J45": "chest_xray",  # asthma
+    "I21": "chest_xray",  # MI
+    "K21": "ct_scan",     # GERD
+    "G40": "chest_xray",  # epilepsy (fallback — no brain MRI in medmnist)
+    "C34": "pathology",   # lung cancer
+    "N18": "ct_scan",     # CKD
+    "F32": "chest_xray",  # depression (fallback)
+    "M54": "ct_scan",     # back pain
+    "I50": "chest_xray",  # heart failure
+    "E78": "chest_xray",  # hyperlipidemia
+}
+
 CONSTRAINTS = [
-    "CREATE CONSTRAINT patient_id   IF NOT EXISTS FOR (n:Patient)   REQUIRE n.patientId   IS UNIQUE",
-    "CREATE CONSTRAINT doctor_id    IF NOT EXISTS FOR (n:Doctor)    REQUIRE n.doctorId    IS UNIQUE",
-    "CREATE CONSTRAINT diag_code    IF NOT EXISTS FOR (n:Diagnosis) REQUIRE n.icdCode     IS UNIQUE",
-    "CREATE CONSTRAINT med_id       IF NOT EXISTS FOR (n:Medication) REQUIRE n.drugId     IS UNIQUE",
-    "CREATE CONSTRAINT proc_code    IF NOT EXISTS FOR (n:Procedure) REQUIRE n.procCode    IS UNIQUE",
-    "CREATE CONSTRAINT hospital_id  IF NOT EXISTS FOR (n:Hospital)  REQUIRE n.hospitalId IS UNIQUE",
+    "CREATE CONSTRAINT patient_id   IF NOT EXISTS FOR (n:Patient)      REQUIRE n.patientId   IS UNIQUE",
+    "CREATE CONSTRAINT doctor_id    IF NOT EXISTS FOR (n:Doctor)        REQUIRE n.doctorId    IS UNIQUE",
+    "CREATE CONSTRAINT diag_code    IF NOT EXISTS FOR (n:Diagnosis)     REQUIRE n.icdCode     IS UNIQUE",
+    "CREATE CONSTRAINT med_id       IF NOT EXISTS FOR (n:Medication)    REQUIRE n.drugId      IS UNIQUE",
+    "CREATE CONSTRAINT proc_code    IF NOT EXISTS FOR (n:Procedure)     REQUIRE n.procCode    IS UNIQUE",
+    "CREATE CONSTRAINT hospital_id  IF NOT EXISTS FOR (n:Hospital)      REQUIRE n.hospitalId  IS UNIQUE",
+    "CREATE CONSTRAINT image_id     IF NOT EXISTS FOR (n:MedicalImage)  REQUIRE n.imageId     IS UNIQUE",
 ]
 
 INDEXES = [
-    "CREATE INDEX patient_name  IF NOT EXISTS FOR (n:Patient)   ON (n.name)",
-    "CREATE INDEX doctor_spec   IF NOT EXISTS FOR (n:Doctor)    ON (n.specialty)",
+    "CREATE INDEX patient_name     IF NOT EXISTS FOR (n:Patient)       ON (n.name)",
+    "CREATE INDEX doctor_spec      IF NOT EXISTS FOR (n:Doctor)        ON (n.specialty)",
     "CREATE INDEX dx_edge_severity IF NOT EXISTS FOR ()-[r:HAS_DIAGNOSIS]-() ON (r.severity)",
-    "CREATE INDEX med_name      IF NOT EXISTS FOR (m:Medication) ON (m.name)",
+    "CREATE INDEX med_name         IF NOT EXISTS FOR (m:Medication)    ON (m.name)",
+    "CREATE INDEX image_type_idx   IF NOT EXISTS FOR (n:MedicalImage)  ON (n.imageType)",
     "CREATE FULLTEXT INDEX doctorNames    IF NOT EXISTS FOR (n:Doctor)    ON EACH [n.name]",
     "CREATE FULLTEXT INDEX patientNames   IF NOT EXISTS FOR (n:Patient)   ON EACH [n.name]",
     "CREATE FULLTEXT INDEX diagnosisNames IF NOT EXISTS FOR (n:Diagnosis) ON EACH [n.name]",
@@ -867,18 +894,143 @@ def enrich_patient_summaries(graph: Neo4jConnection, patient_ids: list[str]) -> 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Medical image download & creation
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _download_medmnist_images(image_dir: str, n_per_type: int = 60) -> dict[str, list[str]]:
+    """Download medmnist sample images to disk. Returns {image_type: [filepath, ...]}."""
+    try:
+        import medmnist
+    except ImportError:
+        print("[ERROR] medmnist not installed.  Run: pip install medmnist")
+        return {}
+
+    try:
+        from PIL import Image as PILImage
+        import numpy as np
+    except ImportError:
+        print("[ERROR] Pillow/numpy not installed.  Run: pip install Pillow numpy")
+        return {}
+
+    Path(image_dir).mkdir(parents=True, exist_ok=True)
+    type_to_files: dict[str, list[str]] = {}
+
+    for img_type, meta in _IMAGE_TYPE_META.items():
+        ds_name = meta["dataset"]
+        DataClass = getattr(medmnist, ds_name, None)
+        if DataClass is None:
+            print(f"[WARN] medmnist class {ds_name!r} not found — skipping {img_type}")
+            continue
+
+        # No size= param → downloads the tiny 28×28 npz files (~5-10 MB each).
+        # We resize to 224×224 locally so BiomedCLIP gets the expected input shape.
+        dataset = DataClass(split="test", download=True)
+
+        files: list[str] = []
+        for idx in range(min(n_per_type, len(dataset))):
+            img_data, _ = dataset[idx]
+
+            # Normalise to a 224×224 RGB PIL Image regardless of source format
+            if hasattr(img_data, "convert"):
+                img = img_data.convert("RGB").resize((224, 224), PILImage.BILINEAR)
+            else:
+                arr = np.array(img_data)
+                if arr.ndim == 2:
+                    arr = np.stack([arr, arr, arr], axis=-1)
+                elif arr.shape[-1] == 1:
+                    arr = np.repeat(arr, 3, axis=-1)
+                if arr.max() <= 1.0:
+                    arr = (arr * 255).astype(np.uint8)
+                img = PILImage.fromarray(arr.astype(np.uint8)).resize((224, 224), PILImage.BILINEAR)
+
+            filepath = str(Path(image_dir) / f"{img_type}_{idx:04d}.png")
+            img.save(filepath)
+            files.append(filepath)
+
+        type_to_files[img_type] = files
+        print(f"[Images] Saved {len(files)} {img_type} images → {image_dir}/")
+
+    return type_to_files
+
+
+def create_and_link_medical_images(
+    graph: Neo4jConnection,
+    image_dir: str,
+    patient_ids: list[str],
+    patient_diagnoses: dict[str, list[str]],
+    images_per_patient: tuple[int, int] = (1, 3),
+) -> None:
+    """Create MedicalImage nodes and link them to patients based on their diagnoses."""
+    print("[INFO] Downloading medical images (medmnist) …")
+    type_to_files = _download_medmnist_images(image_dir)
+    if not type_to_files:
+        print("[WARN] No images available — skipping MedicalImage creation")
+        return
+
+    print("[INFO] Creating MedicalImage nodes and linking to patients …")
+    img_counter = 0
+    for pid in patient_ids:
+        diags = patient_diagnoses.get(pid, [])
+        n_images = random.randint(*images_per_patient)
+
+        # Preferred image types based on patient's diagnoses (de-duplicated)
+        preferred_types = list({_DIAG_TO_IMAGE_TYPE.get(d, "chest_xray") for d in diags})
+
+        for _ in range(n_images):
+            img_type = random.choice(preferred_types) if preferred_types else "chest_xray"
+            pool = type_to_files.get(img_type) or type_to_files.get("chest_xray", [])
+            if not pool:
+                continue
+
+            filepath = random.choice(pool)
+            img_id   = f"IMG{img_counter:05d}"
+            img_counter += 1
+            meta     = _IMAGE_TYPE_META[img_type]
+
+            graph.query(
+                """
+                MERGE (img:MedicalImage {imageId: $img_id})
+                SET img.filePath     = $filepath,
+                    img.imageType    = $img_type,
+                    img.modality     = $modality,
+                    img.capturedDate = $date,
+                    img.description  = $description,
+                    img.patientId    = $pid
+                WITH img
+                MATCH (p:Patient {patientId: $pid})
+                MERGE (p)-[:HAS_IMAGE]->(img)
+                """,
+                parameters={
+                    "img_id":      img_id,
+                    "filepath":    filepath,
+                    "img_type":    img_type,
+                    "modality":    meta["modality"],
+                    "date":        rand_date(2020, 2024),
+                    "description": meta["description"],
+                    "pid":         pid,
+                },
+            )
+
+    print(f"[INFO] Created {img_counter} MedicalImage nodes")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Populate a medical Neo4j graph with random data")
-    parser.add_argument("--uri",      default="bolt://localhost:7687")
-    parser.add_argument("--user",     default="neo4j")
-    parser.add_argument("--password", default="quantapass")
-    parser.add_argument("--patients", type=int, default=100)
-    parser.add_argument("--doctors",  type=int, default=30)
-    parser.add_argument("--clean",    action="store_true")
-    parser.add_argument("--demo",     action="store_true")
+    parser.add_argument("--uri",        default="bolt://localhost:7687")
+    parser.add_argument("--user",       default="neo4j")
+    parser.add_argument("--password",   default="quantapass")
+    parser.add_argument("--patients",   type=int, default=100)
+    parser.add_argument("--doctors",    type=int, default=30)
+    parser.add_argument("--clean",      action="store_true")
+    parser.add_argument("--demo",       action="store_true")
+    parser.add_argument("--no-images",  action="store_true",
+                        help="Skip medical image download and MedicalImage node creation")
+    parser.add_argument("--image-dir",  default="./medical_images",
+                        help="Directory to store downloaded medical images (default: ./medical_images)")
     args = parser.parse_args()
 
     graph = neo4j_connection(
@@ -912,20 +1064,23 @@ def main() -> None:
     link_comorbid_diagnoses(graph)
     link_drug_interactions(graph)
 
-    # ── NEW: enrich summaries after all relationships are in place ─────────
+    # ── Enrich summaries after all relationships are in place ──────────────
     enrich_patient_summaries(graph, patient_ids)
 
-    # schema = graph.get_schema()
-    # print("\n[INFO] Graph schema:")
-    # print(schema)
+    # ── Download images and create MedicalImage nodes ──────────────────────
+    if not args.no_images:
+        create_and_link_medical_images(
+            graph, args.image_dir, patient_ids, patient_diagnoses
+        )
 
     graph.close()
     print("\n[INFO] Done ✓")
     print("\n[INFO] Embedding-ready text fields:")
-    print("  Patient   → p.summary")
-    print("  Doctor    → d.expertise")
-    print("  Diagnosis → d.clinicalDescription")
-    print("  Procedure → p.procedureDescription")
+    print("  Patient       → p.summary")
+    print("  Doctor        → d.expertise")
+    print("  Diagnosis     → d.clinicalDescription")
+    print("  Procedure     → p.procedureDescription")
+    print("  MedicalImage  → image embeddings via BiomedCLIP (image_indexer.build())")
 
 
 if __name__ == "__main__":

@@ -198,3 +198,210 @@ def build_indexer(
     indexer.build()
     indexer.save()
     return indexer
+
+
+# ── Image index ────────────────────────────────────────────────────────────────
+
+_IMAGE_INDEX_KEY = "images"
+_IMAGE_EMBED_DIM = 512  # BiomedCLIP output dimensionality
+
+
+def _image_index_exists(index_dir: str) -> bool:
+    p = Path(index_dir)
+    return (
+        (p / f"{_IMAGE_INDEX_KEY}.tvim").exists()
+        and (p / f"{_IMAGE_INDEX_KEY}.ids.json").exists()
+        and (p / "image_metadata.json").exists()
+    )
+
+
+class ImageIndexer:
+    """BiomedCLIP-based index for medical images. Supports text→image and image→image search."""
+
+    MODEL_NAME = "hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
+
+    def __init__(self, graph: Neo4jConnection, index_dir: str = _DEFAULT_INDEX_DIR) -> None:
+        self._graph = graph
+        self._index_dir = index_dir
+        self._model = None
+        self._preprocess = None
+        self._tokenizer = None
+        self._index = QuantaIndex(
+            name=_IMAGE_INDEX_KEY,
+            dim=_IMAGE_EMBED_DIM,
+            bit_width=4,
+            index_dir=index_dir,
+        )
+        self.id_to_metadata: dict[str, dict] = {}
+
+    # ── Model loading (lazy) ───────────────────────────────────────────────────
+
+    def _load_model(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            import open_clip
+        except ImportError:
+            raise ImportError(
+                "open_clip_torch is not installed. Run: pip install open_clip_torch"
+            )
+        model, _preprocess_train, preprocess_val = open_clip.create_model_and_transforms(
+            self.MODEL_NAME
+        )
+        tokenizer = open_clip.get_tokenizer(self.MODEL_NAME)
+        model.eval()
+        self._model = model
+        self._preprocess = preprocess_val
+        self._tokenizer = tokenizer
+        print("[ImageIndexer] BiomedCLIP loaded")
+
+    # ── Embedding ──────────────────────────────────────────────────────────────
+
+    def embed_image(self, image_path: str) -> np.ndarray:
+        """Embed an image file → 512-dim L2-normalised vector."""
+        import torch
+        from PIL import Image
+
+        self._load_model()
+        img = Image.open(image_path).convert("RGB")
+        tensor = self._preprocess(img).unsqueeze(0)
+        with torch.no_grad():
+            features = self._model.encode_image(tensor)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features.squeeze(0).cpu().numpy().astype(np.float32)
+
+    def embed_text(self, text: str) -> np.ndarray:
+        """Embed a text query for cross-modal image search → 512-dim L2-normalised vector."""
+        import torch
+
+        self._load_model()
+        tokens = self._tokenizer([text])
+        with torch.no_grad():
+            features = self._model.encode_text(tokens)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features.squeeze(0).cpu().numpy().astype(np.float32)
+
+    # ── Build / Save / Load ────────────────────────────────────────────────────
+
+    def build(self) -> None:
+        """Query Neo4j for MedicalImage nodes, embed each image, add to index."""
+        self._load_model()
+        rows = self._graph.query(
+            "MATCH (img:MedicalImage) "
+            "RETURN img.imageId AS id, img.filePath AS path, "
+            "       img.imageType AS img_type, img.description AS description, "
+            "       img.modality AS modality, img.capturedDate AS captured_date, "
+            "       img.patientId AS patient_id"
+        ) or []
+
+        if not rows:
+            print("[ImageIndexer] No MedicalImage nodes found — skipping")
+            return
+
+        vectors: list[np.ndarray] = []
+        ids: list[str] = []
+        for i, row in enumerate(rows):
+            path = row.get("path") or ""
+            if not path or not Path(path).exists():
+                continue
+            try:
+                vec = self.embed_image(path)
+                vectors.append(vec)
+                img_id = str(row["id"])
+                ids.append(img_id)
+                self.id_to_metadata[img_id] = {
+                    "image_type":    row.get("img_type", ""),
+                    "description":   row.get("description", ""),
+                    "modality":      row.get("modality", ""),
+                    "captured_date": str(row.get("captured_date") or ""),
+                    "patient_id":    row.get("patient_id", ""),
+                    "file_path":     path,
+                }
+            except Exception as exc:
+                print(f"[WARN] Could not embed {path}: {exc}")
+
+            if (i + 1) % 50 == 0:
+                print(f"[ImageIndexer] Embedded {i + 1}/{len(rows)} images …")
+
+        if vectors:
+            self._index.add(np.stack(vectors), ids)
+        print(f"[ImageIndexer] {len(ids)} images indexed")
+
+    def save(self) -> None:
+        Path(self._index_dir).mkdir(parents=True, exist_ok=True)
+        self._index.save()
+        meta_path = Path(self._index_dir) / "image_metadata.json"
+        meta_path.write_text(
+            json.dumps(self.id_to_metadata, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"[ImageIndexer] Saved to {self._index_dir}/")
+
+    @classmethod
+    def load_from_disk(
+        cls, graph: Neo4jConnection, index_dir: str = _DEFAULT_INDEX_DIR
+    ) -> "ImageIndexer":
+        instance: "ImageIndexer" = cls.__new__(cls)
+        instance._graph = graph
+        instance._index_dir = index_dir
+        instance._model = None
+        instance._preprocess = None
+        instance._tokenizer = None
+        instance._index = QuantaIndex.load(_IMAGE_INDEX_KEY, index_dir=index_dir)
+        meta_path = Path(index_dir) / "image_metadata.json"
+        instance.id_to_metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        print(
+            f"[ImageIndexer] Loaded {len(instance._index)} image vectors from {index_dir}/"
+        )
+        return instance
+
+    # ── Search ─────────────────────────────────────────────────────────────────
+
+    def search(
+        self,
+        query_vec: np.ndarray,
+        k: int = 5,
+        image_type: str | None = None,
+    ) -> list[dict]:
+        """Return top-k similar images. Optionally filter by image_type."""
+        allowed_ids: list[str] | None = None
+        if image_type:
+            allowed_ids = [
+                iid for iid, meta in self.id_to_metadata.items()
+                if meta.get("image_type") == image_type
+            ]
+
+        kwargs: dict = {"k": k}
+        if allowed_ids is not None:
+            kwargs["allowed_ids"] = allowed_ids
+
+        hits = self._index.search(query_vec, **kwargs)
+        results = []
+        for hit in hits:
+            meta = self.id_to_metadata.get(hit.id, {})
+            results.append({
+                "image_id":     hit.id,
+                "score":        hit.score,
+                "image_type":   meta.get("image_type", ""),
+                "modality":     meta.get("modality", ""),
+                "description":  meta.get("description", ""),
+                "patient_id":   meta.get("patient_id", ""),
+                "captured_date": meta.get("captured_date", ""),
+                "file_path":    meta.get("file_path", ""),
+            })
+        return results
+
+
+def build_image_indexer(
+    graph: Neo4jConnection,
+    index_dir: str = _DEFAULT_INDEX_DIR,
+    force_rebuild: bool = False,
+) -> ImageIndexer:
+    if not force_rebuild and _image_index_exists(index_dir):
+        print(f"[ImageIndexer] Found existing index in {index_dir}/ — loading from disk …")
+        return ImageIndexer.load_from_disk(graph=graph, index_dir=index_dir)
+
+    print("[ImageIndexer] Building image index from Neo4j …")
+    indexer = ImageIndexer(graph=graph, index_dir=index_dir)
+    indexer.build()
+    indexer.save()
+    return indexer

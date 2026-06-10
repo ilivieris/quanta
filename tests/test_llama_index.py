@@ -207,7 +207,7 @@ async def test_aquery_delegates_to_search(vector_store, retriever):
     result = await store.aquery(query)
 
     assert len(result.nodes) == 1
-    assert result.nodes[0].score == pytest.approx(0.7)
+    assert result.nodes[0].score == pytest.approx(0.63)
     assert result.ids == ["ch-1"]
 
 

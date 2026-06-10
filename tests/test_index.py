@@ -135,11 +135,9 @@ def test_search_with_allowed_ids(turbo_index, sample_vectors, sample_ids):
 
     results = idx.search(sample_vectors[0], k=2, allowed_ids=allowed)
 
-    inner.search_with_allowlist.assert_called_once()
-    allowlist_arg = inner.search_with_allowlist.call_args.kwargs.get(
-        "allowlist",
-        inner.search_with_allowlist.call_args[1].get("allowlist"),
-    )
+    inner.search.assert_called_once()
+    allowlist_arg = inner.search.call_args.kwargs.get("allowlist")
+    assert allowlist_arg is not None
     assert len(allowlist_arg) == 5
     assert len(results) == 2
 
