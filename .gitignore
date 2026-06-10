@@ -219,3 +219,6 @@ __marimo__/
 
 # Claude
 .claude/
+
+medical_search
+medical_search/*

@@ -114,6 +114,8 @@ class MultiRetriever:
         use_graph: bool = True,
         graph_hops: int = 2,
         graph_seed_k: int = 5,
+        graph_decay: float = 0.5,
+        graph_boost: float = 0.10,
         filters: dict[str, Any] | None = None,
         index_names: list[str] | None = None,
         query_text: str | None = None,
@@ -126,6 +128,8 @@ class MultiRetriever:
             use_graph:      Whether to expand results via the graph backend.
             graph_hops:     Maximum traversal depth for graph expansion.
             graph_seed_k:   Number of top dense hits to use as graph seeds.
+            graph_decay:    Per-hop score decay for graph-only results (default 0.5).
+            graph_boost:    Score added to dense hits also found via graph (default 0.10).
             filters:        JSONB containment filter applied to chunk metadata.
             index_names:    Restrict search to these indexes only.
             query_text:     Raw query string used for optional BM25 search leg.
@@ -156,24 +160,26 @@ class MultiRetriever:
             allowed_ids = [c.id for c in filtered_chunks]
 
         # ── Step 2: determine active legs and compute weights ──────────────
-        # When BM25 is active the three weights are renormalised to sum to 1.
-        # Without BM25 the original dense_weight / graph_weight are used directly
-        # (preserving historical score magnitudes for dense-only queries).
+        # When BM25 is active the dense and BM25 weights are renormalised to sum
+        # to dense_weight + bm25_weight (graph scoring is independent).
         bm25_active = not isinstance(self._bm25, NullBM25) and query_text is not None
 
         if bm25_active:
-            total_w = self._dense_weight + self._bm25_weight + self._graph_weight
+            total_w = self._dense_weight + self._bm25_weight
             if total_w == 0.0:
                 total_w = 1.0
             eff_dense = self._dense_weight / total_w
             eff_bm25 = self._bm25_weight / total_w
-            eff_graph = self._graph_weight / total_w
         else:
             eff_dense = self._dense_weight
             eff_bm25 = 0.0
-            eff_graph = self._graph_weight
 
-        # ── Step 3: per-index vector search + normalise ────────────────────
+        # ── Step 3: per-index vector search (raw cosine scores) ───────────
+        # When graph expansion is active, fetch max(k, graph_seed_k) results
+        # so we have enough high-quality seeds for graph traversal.
+        graph_active = use_graph and not isinstance(self._graph, NullGraph)
+        fetch_k = max(k, graph_seed_k) if graph_active else k
+
         per_index_weight = eff_dense / len(active_names)
         score_map: dict[str, float] = {}
         dense_ids: set[str] = set()
@@ -181,13 +187,12 @@ class MultiRetriever:
         for name in active_names:
             idx = self._indexes[name]
             query = np.asarray(query_vectors[name], dtype=np.float32)
-            hits = idx.search(query, k=k, allowed_ids=allowed_ids)
+            hits = idx.search(query, k=fetch_k, allowed_ids=allowed_ids)
             if not hits:
                 continue
 
-            norm = _normalize([h.score for h in hits])
-            for hit, ns in zip(hits, norm, strict=False):
-                score_map[hit.id] = score_map.get(hit.id, 0.0) + per_index_weight * ns
+            for hit in hits:
+                score_map[hit.id] = score_map.get(hit.id, 0.0) + per_index_weight * float(hit.score)
                 dense_ids.add(hit.id)
 
         # ── Step 4: BM25 leg ───────────────────────────────────────────────
@@ -201,12 +206,21 @@ class MultiRetriever:
                     bm25_ids.add(bid)
 
         # ── Step 5: graph expansion ────────────────────────────────────────
+        # Scoring mirrors the reference app.py algorithm:
+        #   - seeds: top graph_seed_k dense results
+        #   - new graph-only docs:   score = min_seed * decay^hop
+        #   - dense docs also in graph: score += boost / hop
         graph_ids: set[str] = set()
-        if use_graph and score_map and not isinstance(self._graph, NullGraph):
+        if graph_active and score_map:
             seeds = sorted(score_map, key=score_map.__getitem__, reverse=True)[:graph_seed_k]
+            min_seed_score = min(score_map[s] for s in seeds)
             expanded = await self._graph.expand(seed_ids=seeds, hops=graph_hops)
             for gid, g_score in expanded:
-                score_map[gid] = score_map.get(gid, 0.0) + eff_graph * g_score
+                hop = max(1, round(1.0 / g_score))  # g_score = 1.0/dist
+                if gid in score_map:
+                    score_map[gid] = score_map[gid] + graph_boost / hop
+                else:
+                    score_map[gid] = min_seed_score * (graph_decay ** hop)
                 graph_ids.add(gid)
 
         if not score_map:
