@@ -272,3 +272,10 @@ mypy quanta/
 ## License
 
 MIT
+
+
+
+<!-- # 3. Queries στο REPL
+> Βρες chest X-rays με πνευμονία
+> image:./medical_images/chest_xray_0042.png  Ποιοι ασθενείς έχουν παρόμοια εικόνα;
+> Δείξε μου τις εικόνες του Γεώργιου Παπαδόπουλου -->
