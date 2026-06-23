@@ -17,6 +17,8 @@ from examples.project.indexer import ImageIndexer, MedicalIndexer, build_image_i
 from examples.project.redis_service import REDIS_AVAILABLE, delete_conversation, load_history, save_message
 from examples.project.tools import TOOLS, dispatch_tool
 
+
+
 _SYSTEM_PROMPT_BASE = """\
 You are a medical information assistant with access to a hospital knowledge
 graph. You help medical staff retrieve patient information, doctor details,
@@ -140,8 +142,8 @@ class MedicalSearchAgent:
         self.indexer = indexer
         self.graph = graph
         self.image_indexer = image_indexer
-        self.client = openai.OpenAI()
-        self.model = "gpt-4.1-mini-2025-04-14"
+        self.client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        self.model = os.environ.get("OPENAI_MODEL")
         self.system_prompt = _build_system_prompt(graph)
 
     def query(self, user_message: str, conversation_id: str | None = None) -> str:
