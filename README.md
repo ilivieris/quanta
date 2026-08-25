@@ -18,11 +18,18 @@ document store.
 Quanta retrieves documents using three complementary signals: dense vector
 similarity, BM25 keyword relevance, and graph-structural proximity. Vectors are
 stored as 4-bit quantised integers via turbovec — **8× less memory than
-float32** — without a separate ANN server. The graph is a candidate expander,
-not a scorer: it widens the candidate pool by traversing edges from the top
-dense hits; final ranking is determined by dense + BM25 scores only. Every
-component is optional; `NullGraph`, `NullBM25`, and `NullCache` provide zero-cost
-fallbacks so you adopt features incrementally.
+float32** — without a separate ANN server.
+
+Legs are combined with **weighted Reciprocal Rank Fusion (RRF)** — only the
+rank a document reaches within a leg matters, never its raw score. Cosine
+similarity, BM25 relevance and hop distance live on incomparable scales, so any
+min-max or z-score normalisation between them would be arbitrary.
+
+The graph is a **candidate expander, not a scorer**: it widens the candidate
+pool by traversing edges from the top hits, and the newly admitted documents are
+then re-scored by the dense indexes and ranked on that content evidence like any
+other candidate. Every component is optional; `NullGraph`, `NullBM25`, and
+`NullCache` provide zero-cost fallbacks so you adopt features incrementally.
 
 ---
 
@@ -32,17 +39,22 @@ fallbacks so you adopt features incrementally.
 User query (text embedding + optional query_text)
     │
     ├── QuantaIndex("text")   ──┐
-    ├── QuantaIndex("images") ──┼── min-max normalise ──► score_map
-    └── TantivyBM25           ──┘
-                                        │
-              top graph_seed_k IDs ◄────┘
+    ├── QuantaIndex("images") ──┼── rank within each leg ──► preliminary RRF
+    └── TantivyBM25           ──┘                                    │
+                                                                   │
+              top graph_seed_k IDs ◄──────────────────────────┘
                         │
               Neo4jGraph.expand()        ← BFS up to graph_hops steps
-              (candidate expander;       ← adds new doc IDs to pool
-               does not affect dense    ← graph score = graph_weight × 1/dist
-               or BM25 scores)
+              (candidate expander)       ← adds new doc IDs to the pool
                         │
-              Sort all candidates by score, take top-k
+              re-score the new IDs       ← constrained dense search over
+              against every dense index    the expanded IDs only
+                        │
+              final weighted RRF:
+                  score(d) = Σ_legs  w_leg / (rrf_k + rank_leg(d))
+              (the graph is a leg only when graph_weight > 0)
+                        │
+              Sort candidates by score, take top-k
                         │
               DocStore (PostgreSQL / DuckDB) — hydrate content + metadata
                         │
@@ -207,7 +219,10 @@ async def main():
         docstore=docstore,
         graph=graph,
         dense_weight=0.7,
-        graph_weight=0.3,
+        # graph_weight=0.0 (default): the graph only widens the candidate pool.
+        # Raise it to give graph-adjacent documents a rank-fusion budget of
+        # their own — required for expanded documents that have no vector.
+        graph_weight=0.0,
     )
 
     # Build graph (one-time indexing step)
@@ -272,10 +287,3 @@ mypy quanta/
 ## License
 
 MIT
-
-
-
-<!-- # 3. Queries στο REPL
-> Βρες chest X-rays με πνευμονία
-> image:./medical_images/chest_xray_0042.png  Ποιοι ασθενείς έχουν παρόμοια εικόνα;
-> Δείξε μου τις εικόνες του Γεώργιου Παπαδόπουλου -->

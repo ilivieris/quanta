@@ -255,29 +255,57 @@ The cache is accessed via `MultiRetriever.get_or_embed(text, embed_fn)`.
 
 `MultiRetriever` orchestrates all components. Its scoring model:
 
-1. Dense scores from each active `QuantaIndex` are **min-max normalised** to
-   `[0, 1]`, then multiplied by `dense_weight / n_active_indexes`.
-2. BM25 scores (when `query_text` is provided and a `TantivyBM25` is wired up)
-   are normalised and multiplied by `bm25_weight`.
-3. When BM25 is active, all three weights are **renormalised** to sum to 1:
-   `eff_w = w / (dense_weight + bm25_weight + graph_weight)`.
-4. Graph expansion runs after dense + BM25 scoring. It adds a score of
-   `graph_weight × (1 / hop_distance)` to each graph-expanded candidate.
-5. Candidates are sorted by final score; the top `k` are hydrated from the
+Quanta fuses on **rank**, not score. Cosine similarity, BM25 relevance and hop
+distance live on incomparable scales, so normalising them onto a shared range
+would be arbitrary — and min-max normalisation in particular is query-dependent,
+since the same document gets a different normalised score depending on how good
+the rest of that query's result list happened to be.
+
+Instead, every leg produces a ranked list and the lists are combined with
+weighted **Reciprocal Rank Fusion**:
+
+```
+score(d) = SUM over legs of  w_leg / (rrf_k + rank_leg(d))
+```
+
+1. Each active `QuantaIndex` ranks its hits by raw score. Its leg weight is
+   `dense_weight / n_active_indexes`.
+2. BM25 (when `query_text` is provided and a `TantivyBM25` is wired up) forms a
+   second ranked list with weight `bm25_weight`.
+3. Graph expansion runs next. The top `graph_seed_k` documents of a preliminary
+   fusion become seeds; the expanded ids that no dense leg had found are
+   **re-scored** by a constrained `search(query, allowed_ids=...)` on each index
+   and merged into that index's ranked list.
+4. The graph itself is a leg only when `graph_weight > 0`, ranked by hop
+   distance. The default is `graph_weight=0.0` — the graph widens the pool and
+   contributes no score of its own.
+5. Candidates are sorted by fused score; the top `k` are hydrated from the
    docstore.
 
-**Worked example** — 1 index, `dense_weight=0.7`, `graph_weight=0.3`, no BM25:
+Only the ratios between weights matter: multiplying every weight by a constant
+leaves the ranking unchanged. `rrf_k` (default 60) damps how much the very top
+ranks dominate — lower it to sharpen the head of the list, raise it to flatten.
 
-| Document | Raw cosine | Normalised | Dense score (`×0.7`) | Graph contribution | Final score |
-|----------|-----------|------------|----------------------|--------------------|-------------|
-| doc-A    | 0.95      | 1.000      | 0.700                | — (seed, excluded) | 0.700       |
-| doc-B    | 0.82      | 0.739      | 0.517                | — (seed, excluded) | 0.517       |
-| doc-C    | 0.71      | 0.478      | 0.335                | — (seed, excluded) | 0.335       |
-| doc-D    | *(not found by dense)* | — | 0.000       | 0.300 (1-hop)      | 0.300       |
-| doc-E    | *(not found by dense)* | — | 0.000       | 0.150 (2-hop)      | 0.150       |
+**Worked example** — 1 index, `dense_weight=0.7`, `graph_weight=0.0` (default),
+`rrf_k=60`, no BM25. Dense search returns the top 3; graph traversal from those
+seeds reaches doc-D (1 hop) and doc-E (2 hops), which are then re-scored against
+the index:
 
-Top seeds: doc-A, doc-B, doc-C. Graph traversal finds doc-D (1 hop) and doc-E
-(2 hops). Both enter the ranked list below the dense hits.
+| Document | Raw cosine            | Dense rank | Fused score `0.7/(60+rank)` |
+|----------|-----------------------|------------|------------------------------|
+| doc-A    | 0.95                  | 1          | 0.011475                     |
+| doc-B    | 0.82                  | 2          | 0.011290                     |
+| doc-C    | 0.71                  | 3          | 0.011111                     |
+| doc-D    | 0.44 *(via re-score)* | 4          | 0.010938                     |
+| doc-E    | 0.39 *(via re-score)* | 5          | 0.010769                     |
+
+doc-D and doc-E were never returned by the first dense pass — the graph put them
+in the pool, and their own cosine similarity placed them at ranks 4 and 5. The
+graph contributed no score.
+
+Note how compressed the absolute values are: RRF deliberately discards score
+magnitudes, so a fused score is meaningful only *relative* to the others in the
+same result list. Do not threshold on it.
 
 ### 4.6 BM25Backend
 
@@ -497,7 +525,7 @@ async def main():
         bm25=bm25,
         dense_weight=0.5,
         bm25_weight=0.3,
-        graph_weight=0.3,
+        graph_weight=0.0,  # default: graph expands the pool, does not score
     )
 
     # Index a document
@@ -867,23 +895,28 @@ another paper's findings.
 The graph fills this gap. It acts as a **candidate expander**:
 
 ```
-Step 1  Dense search finds the top-K candidates by semantic similarity.
-        These become the "seeds."
+Step 1  Dense search (plus BM25 when active) ranks the corpus by content.
+        The top graph_seed_k documents of that preliminary fusion become
+        the "seeds."
 
 Step 2  The graph takes the seeds and expands outward via BFS.
         For each seed, Quanta traverses edges up to graph_hops steps
         in either direction (undirected traversal).
 
-Step 3  Newly reached documents enter the candidate pool with a graph score:
-          graph_score = graph_weight × (1 / hop_distance)
-        At 1 hop: score = graph_weight × 1.0
-        At 2 hops: score = graph_weight × 0.5
+Step 3  Newly reached documents are RE-SCORED, not injected. For every
+        dense index, Quanta issues a second search constrained to the
+        expanded ids:
+          index.search(query, allowed_ids=expanded_ids)
+        The hits are merged into that index's ranked list.
 
-Step 4  ALL candidates are ranked by their combined dense + BM25 + graph score.
+Step 4  ALL candidates - original and expanded - are ranked by weighted RRF
+        over the same legs. An expanded document competes on its own cosine
+        similarity, exactly like one the first pass had returned directly.
 
-Step 5  Graph-expanded candidates that dense search missed entirely start with
-        a dense score of 0.0. Their final score is their graph score alone.
-        They appear after all candidates found by dense or BM25 search.
+Step 5  With graph_weight=0.0 (the default) the graph contributes no score
+        term at all. Its entire benefit is recall: documents that fell below
+        the cutoff of the first pass but sit next to a strong hit are now in
+        the pool and can rank on their own merits.
 ```
 
 The complementary nature of the two signals:
@@ -896,9 +929,16 @@ The complementary nature of the two signals:
 > are complementary signals — the graph does not compete with dense scoring,
 > it widens the candidate pool."
 
-To use the graph purely as a candidate expander with no score contribution, set
-`graph_weight=0.0`. Graph-expanded candidates will then have a final score of
-exactly 0.0 and appear at the bottom of the ranked list.
+`graph_weight=0.0` is the default, and it is the setting the architecture is
+designed around: the graph decides *what is considered*, the content legs decide
+*how well it ranks*.
+
+Raise `graph_weight` above zero only when you need the graph to be a ranking
+signal in its own right. It adds the graph as a further RRF leg ordered by hop
+distance, and it is the **only** way for an expanded document that has no vector
+in any index to appear in the results at all. Spend it carefully: since every
+leg contributes `w / (60 + rank)`, a graph weight comparable to `dense_weight`
+will routinely promote 1-hop neighbours over content-relevant documents.
 
 ---
 
@@ -957,34 +997,60 @@ Seed: doc_004
 ```
 
 **New candidates from graph:**
-- `doc_002`: min hop distance = 1 → `g_score = 1.0`
-- `doc_003`: min hop distance = 2 → `g_score = 0.5`
+- `doc_002`: min hop distance = 1 → graph-leg score `1.0`
+- `doc_003`: min hop distance = 2 → graph-leg score `0.5`
 
 ---
 
-**Step 3 — Score merge** (`dense_weight=0.7`, `graph_weight=0.3`):
+**Step 3 — Re-scoring the expanded candidates**
 
-Normalise dense scores (min=0.38, max=0.91, span=0.53):
+Neither `doc_002` nor `doc_003` was in the first dense pass (`k=3`). Quanta now
+runs a constrained search restricted to exactly those two ids:
 
-| Document | Norm. dense | Dense contrib (`×0.7`) | Graph contrib (`×0.3`) | Final score | Source       |
-|----------|-------------|------------------------|------------------------|-------------|--------------|
-| doc_001  | 1.000       | 0.700                  | 0.000 (seed)           | **0.700**   | dense        |
-| doc_005  | 0.925       | 0.647                  | 0.000 (seed)           | **0.647**   | dense        |
-| doc_004  | 0.623       | 0.436                  | 0.000 (seed)           | **0.436**   | dense        |
-| doc_002  | 0.094       | 0.066                  | 0.300 (hop=1)          | **0.366**   | dense+graph  |
-| doc_003  | 0.000       | 0.000                  | 0.150 (hop=2)          | **0.150**   | dense+graph  |
+```python
+idx.search(query, k=2, allowed_ids=["doc_002", "doc_003"])
+→ [("doc_002", 0.43), ("doc_003", 0.38)]
+```
+
+Their real cosine scores are merged into the dense leg, which now ranks all five
+documents: doc_001 (0.91), doc_005 (0.87), doc_004 (0.71), doc_002 (0.43),
+doc_003 (0.38).
 
 ---
 
-**Side-by-side comparison:**
+**Step 4 — Weighted RRF** (`dense_weight=0.7`, `rrf_k=60`, `k=5`):
 
-| Rank | Dense-only                 | Dense + Graph              |
-|------|----------------------------|----------------------------|
-| 1    | doc_001 (0.700) — law      | doc_001 (0.700) — law      |
-| 2    | doc_005 (0.647) — directive| doc_005 (0.647) — directive|
-| 3    | doc_004 (0.436) — telecom  | doc_004 (0.436) — telecom  |
-| 4    | doc_002 (0.066) — decision | **doc_002 (0.366) — decision** ↑ boosted |
-| 5    | doc_003 (0.000) — circular | **doc_003 (0.150) — circular** ↑ boosted |
+| Document | Dense rank | Dense contrib `0.7/(60+r)` | Graph rank | Final (`graph_weight=0.0`) | Source       |
+|----------|------------|-----------------------------|------------|-----------------------------|--------------|
+| doc_001  | 1          | 0.011475                    | —          | **0.011475**                | dense        |
+| doc_005  | 2          | 0.011290                    | —          | **0.011290**                | dense        |
+| doc_004  | 3          | 0.011111                    | —          | **0.011111**                | dense        |
+| doc_002  | 4          | 0.010938                    | 1          | **0.010938**                | dense+graph  |
+| doc_003  | 5          | 0.010769                    | 2          | **0.010769**                | dense+graph  |
+
+With `graph_weight=0.3` the graph leg contributes `0.3/(60+rank)` on top:
+
+| Document | Final (`graph_weight=0.3`)         | Change         |
+|----------|------------------------------------|----------------|
+| doc_002  | 0.010938 + 0.004918 = **0.015856** | rank 4 → **1** |
+| doc_003  | 0.010769 + 0.004839 = **0.015608** | rank 5 → **2** |
+| doc_001  | **0.011475**                       | rank 1 → 3     |
+
+This is exactly the behaviour the default guards against: a graph weight of 0.3
+against a dense weight of 0.7 is not a "modest boost" under RRF - it is enough
+to put every 1-hop neighbour above the best content match.
+
+---
+
+**Side-by-side comparison** (`graph_weight=0.0`):
+
+| Rank | Dense-only, k=3            | Dense + graph expansion, k=5 |
+|------|----------------------------|------------------------------|
+| 1    | doc_001 — law              | doc_001 — law                |
+| 2    | doc_005 — directive        | doc_005 — directive          |
+| 3    | doc_004 — telecom          | doc_004 — telecom            |
+| 4    | *(not retrieved)*          | **doc_002 — decision** ← admitted by the graph |
+| 5    | *(not retrieved)*          | **doc_003 — circular** ← admitted by the graph |
 
 **What the graph contributed:**
 
@@ -1136,13 +1202,13 @@ Recommended starting point: `graph_seed_k=3`, `graph_hops=2`. In practice,
 most useful graph paths are within 2 hops. A 3-hop expansion in a dense graph
 can add hundreds of candidates.
 
-> **Note:** `graph_weight` controls how much the graph-derived score
-> (`1 / hop_distance`) contributes to the final ranking. Setting
-> `graph_weight=0.0` turns the graph into a pure candidate expander: expanded
-> documents enter the pool but do not receive any score boost. They will appear
-> at the bottom of results unless they are also found by dense or BM25 search.
-> Tune `graph_seed_k` and `graph_hops` to control how broadly the graph
-> expands.
+> **Note:** `graph_weight` decides whether the graph is also a *ranking* signal.
+> At the default `0.0` it is not: expanded documents enter the pool, are
+> re-scored against the dense indexes, and rank on that content evidence alone.
+> Above `0.0` the graph becomes a further RRF leg ordered by hop distance -
+> needed only when expanded documents have no vector of their own. Prefer tuning
+> `graph_seed_k` and `graph_hops` to control how broadly the graph expands, and
+> leave `graph_weight` at zero unless you have measured that you need it.
 
 ---
 
@@ -1259,23 +1325,27 @@ bm25.commit()
 ### 10.3 Hybrid scoring
 
 When `query_text` is provided to `retriever.search()` and a `TantivyBM25`
-instance is wired into `MultiRetriever`, all three weights are renormalised:
+instance is wired into `MultiRetriever`, BM25 joins the fusion as its own ranked
+leg:
 
 ```
-eff_dense = dense_weight / (dense_weight + bm25_weight + graph_weight)
-eff_bm25  = bm25_weight  / (dense_weight + bm25_weight + graph_weight)
-eff_graph = graph_weight / (dense_weight + bm25_weight + graph_weight)
+score(d) =  (dense_weight / n_indexes) / (rrf_k + dense_rank(d))
+          +  bm25_weight              / (rrf_k + bm25_rank(d))
+          +  graph_weight             / (rrf_k + graph_rank(d))
 ```
 
-With defaults `dense_weight=0.5`, `bm25_weight=0.3`, `graph_weight=0.3`:
+No renormalisation is applied or needed: scaling every weight by a constant
+leaves the ranking untouched, so only the ratios matter. With the defaults
+`dense_weight=0.5`, `bm25_weight=0.3`, `graph_weight=0.0` and one index, a
+document ranked first by dense and third by BM25 scores:
+
 ```
-eff_dense = 0.5 / 1.1 ≈ 0.455
-eff_bm25  = 0.3 / 1.1 ≈ 0.273
-eff_graph = 0.3 / 1.1 ≈ 0.273
+0.5/(60+1) + 0.3/(60+3) = 0.008197 + 0.004762 = 0.012959
 ```
 
-BM25 is only active when both `query_text` is passed to `search()` AND the
-`bm25` instance is not a `NullBM25`.
+`dense_weight` defaults to `0.5` when a live BM25 backend is attached and `0.7`
+otherwise. BM25 is only active when both `query_text` is passed to `search()`
+AND the `bm25` instance is not a `NullBM25`.
 
 ### 10.4 query_text parameter
 

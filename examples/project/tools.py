@@ -89,6 +89,9 @@ def run_fuzzy_name_search(
     limit: int = 10,
 ) -> list[dict]:
     """Fulltext fuzzy search using Neo4j's Lucene ~ operator."""
+    if not name or not name.strip():
+        return []
+
     # Build a Lucene fuzzy query: each token gets a ~ suffix for edit-distance matching
     fuzzy_query = " ".join(token + "~" for token in name.split())
 

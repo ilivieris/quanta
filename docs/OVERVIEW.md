@@ -79,33 +79,73 @@ The recall impact: pre-filtering a corpus of 100,000 chunks to a subset of
 If the filter is highly selective, this can reduce recall. The mitigation is to
 increase `k` relative to the expected filter selectivity.
 
-### 3. Graph as Candidate Expander
+### 3. Rank Fusion, Not Score Fusion
 
-The graph's role is frequently misunderstood. It is not a relevance scorer. The
-score formula in `MultiRetriever` is:
+The three legs produce scores on incomparable scales. Cosine similarity is
+bounded in `[-1, 1]` and, for a well-trained embedding model over a topical
+corpus, is compressed into a narrow band near the top. BM25 is unbounded and
+grows with query length and corpus statistics. Inverse hop distance takes values
+in `{1, 1/2, 1/3, ...}` and is a property of the graph, not of the query.
+
+Normalising these onto a common range does not make them comparable — it only
+hides the incompatibility behind an arbitrary affine map. Min-max normalisation
+is worse than arbitrary: it is *query-dependent*. The same document with the same
+cosine similarity receives a different normalised score depending on how good
+the rest of that query's result list happened to be, and a leg whose top hits
+are all nearly tied has its tiny score differences stretched to fill `[0, 1]`.
+
+Quanta therefore fuses on **rank**, not score, using weighted Reciprocal Rank
+Fusion (Cormack et al., SIGIR 2009):
 
 ```
-final_score = (dense_weight/n_indexes) × normalised_dense_score
-            + bm25_weight × normalised_bm25_score
-            + graph_weight × (1 / hop_distance)
+score(d) = SUM over legs of  w_leg / (rrf_k + rank_leg(d))
 ```
 
-The first two terms are computed from the content of the document. The third
-term is computed from the structural position of the document in the graph.
-These are different kinds of signals and in general are not comparable.
+where `rank_leg(d)` is the 1-based position of `d` in that leg's ranked list and
+`rrf_k` (default 60) damps the influence of the very top ranks. Documents absent
+from a leg simply contribute nothing from it. The only thing a leg has to agree
+on is an ordering, which every retrieval signal can produce by construction.
 
-The reason this distinction matters: a graph score of `1/hop_distance` has no
-relationship to cosine similarity. Mixing them with equal weights would
-produce unpredictable and potentially harmful ranking behaviour — documents that
-happen to be 1 hop from a popular seed would outrank semantically relevant
-documents with no graph connections.
+Leg weights are `dense_weight / n_active_indexes` per dense index,
+`bm25_weight` for the BM25 leg, and `graph_weight` for the graph leg. Under RRF
+only the *ratios* between them matter; scaling all weights by a constant leaves
+the ranking unchanged, so no renormalisation step is needed.
 
-The correct way to think about `graph_weight` is as a small tie-breaker budget,
-not as a second relevance signal of equal standing. Setting `graph_weight=0.0`
-makes the graph a pure candidate expander: it widens the pool of documents
-available for dense + BM25 scoring without affecting scores at all. Setting
-`graph_weight=0.3` gives graph-adjacent documents a modest boost that can lift
-them above dense search's noise floor.
+### 4. Graph as Candidate Expander
+
+The graph's role is frequently misunderstood. It is not a relevance scorer.
+
+Retrieval in Quanta happens in two passes. The first pass ranks the corpus by
+content: dense search over each index, plus BM25 when a query string is given.
+The top `graph_seed_k` documents of the preliminary fusion become seeds, and
+`Neo4jGraph.expand()` runs a bounded BFS from them, returning document ids
+within `graph_hops` steps.
+
+Those ids are then **re-scored, not injected**. For every dense index, Quanta
+issues a second search constrained to the expanded ids via the `allowed_ids`
+allowlist, and merges the resulting hits into that index's ranked list before
+the final fusion. An expanded document therefore competes on its own cosine
+similarity to the query, exactly like a document the first pass had returned
+directly. What the graph changed is *which documents were considered*, not
+*how well they rank*:
+
+```
+graph.expand(seeds)          →  candidate ids
+index.search(q, allowed_ids) →  real cosine scores for those ids
+weighted RRF                 →  final ranking
+```
+
+This is why the default is `graph_weight=0.0`. At that setting the graph
+contributes no term to the score at all, and the entire benefit is recall: the
+pool now contains documents that ranked below the first pass's `k` cutoff but
+are structurally adjacent to a strong hit.
+
+Raising `graph_weight` above zero adds the graph as a further fusion leg, ranked
+by hop distance. This is a tie-breaker budget, and it is the *only* way for an
+expanded document that has no vector in any index to appear in the results at
+all. It should be spent carefully: because RRF compresses each leg into
+`w / (60 + rank)`, a graph weight comparable to `dense_weight` will routinely
+promote 1-hop neighbours over content-relevant documents.
 
 The graph surfaces documents you know are structurally related because you built
 the edges. Dense search surfaces documents that are semantically similar. When a
@@ -113,27 +153,28 @@ court decision uses different terminology than the statute it cites, dense
 search will miss the citation relationship. The graph closes that gap — not by
 scoring, but by inclusion.
 
-Score merge formula (expanded):
+Pipeline (expanded):
 
 ```
-# Step 1: dense contribution
-per_index_weight = dense_weight / n_active_indexes
-for each index:
-    normalised_hits = min_max_normalise(raw_scores)
-    score_map[id] += per_index_weight × normalised_score
+# Pass 1: content legs
+for each active index:
+    leg[name] = {id: raw_score for hits of index.search(q, k=fetch_k)}
+bm25_leg     = {id: raw_score for hits of bm25.search(query_text, k)}
 
-# Step 2: BM25 contribution (when query_text provided and TantivyBM25 active)
-# All weights are renormalised to sum to 1 when BM25 is active
-eff_bm25 = bm25_weight / (dense_weight + bm25_weight + graph_weight)
-score_map[id] += eff_bm25 × normalised_bm25_score
+# Preliminary fusion picks the seeds (graph leg empty)
+seeds = top graph_seed_k of RRF(dense legs, bm25_leg)
 
-# Step 3: graph contribution (candidate expansion + optional score)
-for each graph-expanded id:
-    score_map[id] += eff_graph × (1 / hop_distance)
-    # id was already 0.0 if not found by dense/BM25
+# Pass 2: candidate enlargement + re-scoring
+graph_leg = {id: 1/hop_distance for id in graph.expand(seeds, hops)}
+new_ids   = graph_leg keys not already found by any dense leg
+for each active index:
+    merge index.search(q, allowed_ids=new_ids) into leg[name]
+
+# Final fusion (graph leg participates only when graph_weight > 0)
+score(d) = SUM over legs of  w_leg / (rrf_k + rank_leg(d))
 ```
 
-### 4. Dual Docstore
+### 5. Dual Docstore
 
 Quanta supports two docstore backends with identical async interfaces:
 
@@ -155,7 +196,7 @@ configuration is production-safe: the application fails loudly at startup if the
 configured backend is unreachable, rather than silently falling back to a
 different backend.
 
-### 5. Optional Everything — Null Object Pattern
+### 6. Optional Everything — Null Object Pattern
 
 Every pluggable component has a null implementation:
 
@@ -200,32 +241,38 @@ returns nothing from search. `NullCache` always misses. Their presence means:
    called on the docstore. The result is a set of `allowed_ids`. If the filter
    matches zero chunks, `search()` returns immediately with an empty list.
 
-2. **Compute effective weights** — if BM25 is active (non-null and
-   `query_text` provided), all three weights are renormalised to sum to 1.
-   Otherwise `dense_weight` and `graph_weight` are used as-is.
+2. **Determine active legs** — BM25 is active only when the backend is not a
+   `NullBM25` *and* `query_text` was supplied. The graph is active only when the
+   backend is not a `NullGraph` *and* `use_graph=True`. When the graph is
+   active, the dense legs fetch `max(k, graph_seed_k)` hits so there are enough
+   high-quality seeds.
 
 3. **Per-index vector search** — for each active `QuantaIndex`, `search()` is
-   called with the query vector and `allowed_ids` (if any). Raw scores are
-   min-max normalised per index. Normalised scores are multiplied by
-   `dense_weight / n_active_indexes` and accumulated into `score_map`.
+   called with the query vector and `allowed_ids` (if any). Each index keeps its
+   own ranked list of `(id, raw_score)`; raw scores are never mixed across legs.
 
-4. **BM25 search** — if active, `TantivyBM25.search(query_text, k)` is called.
-   BM25 scores are normalised and multiplied by `eff_bm25`, accumulated into
-   `score_map`.
+4. **BM25 search** — if active, `TantivyBM25.search(query_text, k)` produces a
+   second ranked list.
 
-5. **Graph expansion** — the top `graph_seed_k` IDs from `score_map` become
-   seeds. `Neo4jGraph.expand(seeds, hops=graph_hops)` runs a Cypher BFS query
-   returning `(doc_id, 1/dist)` pairs for non-seed neighbors. Each returned ID
-   is added to `score_map` with a contribution of `eff_graph × (1/dist)`.
-   IDs already in `score_map` receive an additional boost.
+5. **Graph expansion** — a preliminary weighted RRF over the content legs picks
+   the top `graph_seed_k` seeds. `Neo4jGraph.expand(seeds, hops=graph_hops)`
+   runs a Cypher BFS returning `(doc_id, 1/dist)` pairs for non-seed neighbours.
+   Expanded IDs that no dense leg had found are then **re-scored**: each dense
+   index runs a second `search(query, allowed_ids=new_ids)` and the resulting
+   hits are merged into that index's ranked list.
 
-6. **Sort and hydrate** — `score_map` is sorted by descending score; the top
-   `k` IDs are kept. `docstore.get_chunks(top_ids)` retrieves content and
+6. **Weighted RRF** — every leg contributes `w_leg / (rrf_k + rank_leg(d))`.
+   Dense legs carry `dense_weight / n_active_indexes` each, BM25 carries
+   `bm25_weight`, and the graph leg (ranked by hop distance) carries
+   `graph_weight` — zero by default, so the graph normally contributes no score.
+
+7. **Sort and hydrate** — candidates are sorted by descending fused score; the
+   top `k` IDs are kept. `docstore.get_chunks(top_ids)` retrieves content and
    metadata in a single query. Results are assembled as `RetrievalResult`
    dataclasses with `source` tags.
 
-**Unconstrained path (no filters):** steps 3–6 only.
-**Dense-only path (`use_graph=False`, no BM25):** step 3 + half of step 6.
+**Unconstrained path (no filters):** steps 2–7 only.
+**Dense-only path (`use_graph=False`, no BM25):** steps 2, 3, 6, 7.
 
 ---
 

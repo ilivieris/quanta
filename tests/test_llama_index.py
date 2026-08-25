@@ -15,7 +15,7 @@ import pytest
 
 from quanta.exceptions import QuantaError
 from quanta.graph import NullGraph
-from quanta.retriever import MultiRetriever
+from quanta.retriever import RRF_K, MultiRetriever
 from quanta.types import ChunkRecord, RetrievalResult, SearchResult
 
 
@@ -207,7 +207,8 @@ async def test_aquery_delegates_to_search(vector_store, retriever):
     result = await store.aquery(query)
 
     assert len(result.nodes) == 1
-    assert result.nodes[0].score == pytest.approx(0.63)
+    # RRF: single dense leg, rank 1 -> dense_weight / (rrf_k + 1)
+    assert result.nodes[0].score == pytest.approx(0.7 / (RRF_K + 1))
     assert result.ids == ["ch-1"]
 
 

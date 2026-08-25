@@ -17,17 +17,13 @@ from quanta.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+#: Default rank-fusion smoothing constant (Cormack et al., SIGIR 2009).
+RRF_K = 60
 
-def _normalize(scores: list[float]) -> list[float]:
-    """Min-max normalise *scores* to [0, 1].  Equal scores all map to 1.0."""
-    if not scores:
-        return []
-    lo = min(scores)
-    hi = max(scores)
-    if hi == lo:
-        return [1.0] * len(scores)
-    span = hi - lo
-    return [(s - lo) / span for s in scores]
+
+def _ranked_ids(scored: dict[str, float]) -> list[str]:
+    """Return ids ordered by descending score (ties broken by id for determinism)."""
+    return sorted(scored, key=lambda i: (-scored[i], i))
 
 
 class MultiRetriever:
@@ -36,8 +32,25 @@ class MultiRetriever:
 
     Maintains a named pool of :class:`QuantaIndex` instances so queries can be
     issued against one or more modality indexes simultaneously (e.g. ``"text"``
-    and ``"images"``).  Scores from all active legs are weight-normalised then
-    merged.
+    and ``"images"``).
+
+    **Fusion.**  Legs are combined with weighted Reciprocal Rank Fusion (RRF)::
+
+        score(d) = SUM over legs of  w_leg / (rrf_k + rank_leg(d))
+
+    Only the *rank* a document achieves within a leg matters, never its raw
+    score.  This sidesteps the central problem of score-level fusion: cosine
+    similarity, BM25 relevance and inverse hop-distance live on incomparable
+    scales, so any min-max or z-score normalisation of them is arbitrary.
+
+    **The graph expands, it does not score.**  Graph traversal widens the
+    candidate pool; the newly admitted documents are then re-scored by the dense
+    leg (a constrained search restricted to the expanded ids) and ranked on that
+    content evidence like any other candidate.  With the default
+    ``graph_weight=0.0`` the graph therefore contributes *no* score of its own.
+    Raising ``graph_weight`` above zero adds the graph as a further fusion leg,
+    ranked by hop distance -- a tie-breaker budget, and the only way for an
+    expanded document that has no vector in any index to surface at all.
     """
 
     def __init__(
@@ -46,11 +59,12 @@ class MultiRetriever:
         docstore: DocStoreBackend,
         graph: GraphBackend | None = None,
         dense_weight: float | None = None,
-        graph_weight: float = 0.3,
+        graph_weight: float = 0.0,
         config: QuantaSettings | None = None,
         cache: EmbeddingCache | None = None,
         bm25: BM25Backend | None = None,
         bm25_weight: float = 0.3,
+        rrf_k: int = RRF_K,
     ) -> None:
         if not indexes:
             raise QuantaError("MultiRetriever requires at least one QuantaIndex")
@@ -58,11 +72,14 @@ class MultiRetriever:
             raise QuantaError(f"graph_weight must be in [0, 1], got {graph_weight}")
         if not (0.0 <= bm25_weight <= 1.0):
             raise QuantaError(f"bm25_weight must be in [0, 1], got {bm25_weight}")
+        if rrf_k < 1:
+            raise QuantaError(f"rrf_k must be a positive integer, got {rrf_k}")
 
         self._bm25 = bm25 if bm25 is not None else NullBM25()
         bm25_active = not isinstance(self._bm25, NullBM25)
 
-        # dense_weight defaults to 0.5 when BM25 is active, 0.7 otherwise
+        # dense_weight defaults to 0.5 when BM25 is active, 0.7 otherwise.  Under
+        # RRF only the ratio between leg weights matters, not their absolute size.
         _dense = dense_weight if dense_weight is not None else (0.5 if bm25_active else 0.7)
         if not (0.0 <= _dense <= 1.0):
             raise QuantaError(f"dense_weight must be in [0, 1], got {_dense}")
@@ -73,6 +90,7 @@ class MultiRetriever:
         self._dense_weight = _dense
         self._graph_weight = graph_weight
         self._bm25_weight = bm25_weight
+        self._rrf_k = rrf_k
         self._config = config
         self.cache: EmbeddingCache = cache if cache is not None else NullCache()
 
@@ -105,6 +123,32 @@ class MultiRetriever:
     def bm25(self) -> BM25Backend:
         return self._bm25
 
+    # ── Fusion ────────────────────────────────────────────────────────────────
+
+    def _fuse(
+        self,
+        dense_legs: dict[str, dict[str, float]],
+        bm25_leg: dict[str, float],
+        graph_leg: dict[str, float],
+        dense_weight: float,
+        bm25_weight: float,
+    ) -> dict[str, float]:
+        """Weighted Reciprocal Rank Fusion over every active leg."""
+        score_map: dict[str, float] = {}
+        per_index_weight = dense_weight / len(dense_legs) if dense_legs else 0.0
+
+        def _accumulate(leg: dict[str, float], weight: float) -> None:
+            if weight == 0.0 or not leg:
+                return
+            for rank, doc_id in enumerate(_ranked_ids(leg), start=1):
+                score_map[doc_id] = score_map.get(doc_id, 0.0) + weight / (self._rrf_k + rank)
+
+        for leg in dense_legs.values():
+            _accumulate(leg, per_index_weight)
+        _accumulate(bm25_leg, bm25_weight)
+        _accumulate(graph_leg, self._graph_weight)
+        return score_map
+
     # ── Search ────────────────────────────────────────────────────────────────
 
     async def search(
@@ -114,8 +158,6 @@ class MultiRetriever:
         use_graph: bool = True,
         graph_hops: int = 2,
         graph_seed_k: int = 5,
-        graph_decay: float = 0.5,
-        graph_boost: float = 0.10,
         filters: dict[str, Any] | None = None,
         index_names: list[str] | None = None,
         query_text: str | None = None,
@@ -125,14 +167,12 @@ class MultiRetriever:
         Args:
             query_vectors:  Mapping from index name to query embedding.
             k:              Maximum number of results to return.
-            use_graph:      Whether to expand results via the graph backend.
+            use_graph:      Whether to expand the candidate pool via the graph.
             graph_hops:     Maximum traversal depth for graph expansion.
-            graph_seed_k:   Number of top dense hits to use as graph seeds.
-            graph_decay:    Per-hop score decay for graph-only results (default 0.5).
-            graph_boost:    Score added to dense hits also found via graph (default 0.10).
+            graph_seed_k:   Number of top fused hits to use as graph seeds.
             filters:        JSONB containment filter applied to chunk metadata.
             index_names:    Restrict search to these indexes only.
-            query_text:     Raw query string used for optional BM25 search leg.
+            query_text:     Raw query string used for the optional BM25 leg.
         """
         active_names = index_names if index_names is not None else list(query_vectors.keys())
         if not active_names:
@@ -159,75 +199,72 @@ class MultiRetriever:
                 return []
             allowed_ids = [c.id for c in filtered_chunks]
 
-        # ── Step 2: determine active legs and compute weights ──────────────
-        # When BM25 is active the dense and BM25 weights are renormalised to sum
-        # to dense_weight + bm25_weight (graph scoring is independent).
+        # ── Step 2: determine active legs ──────────────────────────────────
         bm25_active = not isinstance(self._bm25, NullBM25) and query_text is not None
+        eff_bm25 = self._bm25_weight if bm25_active else 0.0
 
-        if bm25_active:
-            total_w = self._dense_weight + self._bm25_weight
-            if total_w == 0.0:
-                total_w = 1.0
-            eff_dense = self._dense_weight / total_w
-            eff_bm25 = self._bm25_weight / total_w
-        else:
-            eff_dense = self._dense_weight
-            eff_bm25 = 0.0
-
-        # ── Step 3: per-index vector search (raw cosine scores) ───────────
-        # When graph expansion is active, fetch max(k, graph_seed_k) results
-        # so we have enough high-quality seeds for graph traversal.
         graph_active = use_graph and not isinstance(self._graph, NullGraph)
+        # Fetch enough dense hits to supply high-quality graph seeds.
         fetch_k = max(k, graph_seed_k) if graph_active else k
 
-        per_index_weight = eff_dense / len(active_names)
-        score_map: dict[str, float] = {}
-        dense_ids: set[str] = set()
-
+        # ── Step 3: per-index dense search (raw scores → per-leg ranking) ──
+        dense_legs: dict[str, dict[str, float]] = {}
         for name in active_names:
             idx = self._indexes[name]
             query = np.asarray(query_vectors[name], dtype=np.float32)
-            hits = idx.search(query, k=fetch_k, allowed_ids=allowed_ids)
-            if not hits:
-                continue
+            leg: dict[str, float] = {}
+            for hit in idx.search(query, k=fetch_k, allowed_ids=allowed_ids):
+                # keep the best score per id in case a backend returns duplicates
+                if hit.id not in leg or hit.score > leg[hit.id]:
+                    leg[hit.id] = float(hit.score)
+            dense_legs[name] = leg
 
-            for hit in hits:
-                score_map[hit.id] = score_map.get(hit.id, 0.0) + per_index_weight * float(hit.score)
-                dense_ids.add(hit.id)
+        dense_ids: set[str] = {doc_id for leg in dense_legs.values() for doc_id in leg}
 
         # ── Step 4: BM25 leg ───────────────────────────────────────────────
-        bm25_ids: set[str] = set()
+        bm25_leg: dict[str, float] = {}
         if bm25_active:
-            bm25_hits = self._bm25.search(query_text, k=k)  # type: ignore[arg-type]
-            if bm25_hits:
-                bm25_norm = _normalize([s for _, s in bm25_hits])
-                for (bid, _), ns in zip(bm25_hits, bm25_norm, strict=False):
-                    score_map[bid] = score_map.get(bid, 0.0) + eff_bm25 * ns
-                    bm25_ids.add(bid)
+            for bid, bscore in self._bm25.search(query_text, k=k):  # type: ignore[arg-type]
+                if bid not in bm25_leg or bscore > bm25_leg[bid]:
+                    bm25_leg[bid] = float(bscore)
+        bm25_ids = set(bm25_leg)
 
-        # ── Step 5: graph expansion ────────────────────────────────────────
-        # Scoring mirrors the reference app.py algorithm:
-        #   - seeds: top graph_seed_k dense results
-        #   - new graph-only docs:   score = min_seed * decay^hop
-        #   - dense docs also in graph: score += boost / hop
+        # ── Step 5: graph expansion (candidate enlargement, not scoring) ───
+        # Seeds come from a preliminary fusion of the content legs.  Newly
+        # admitted ids are re-scored by every dense index via a constrained
+        # search, so they compete on content evidence like any other candidate.
+        graph_leg: dict[str, float] = {}
         graph_ids: set[str] = set()
-        if graph_active and score_map:
-            seeds = sorted(score_map, key=score_map.__getitem__, reverse=True)[:graph_seed_k]
-            min_seed_score = min(score_map[s] for s in seeds)
-            expanded = await self._graph.expand(seed_ids=seeds, hops=graph_hops)
-            for gid, g_score in expanded:
-                hop = max(1, round(1.0 / g_score))  # g_score = 1.0/dist
-                if gid in score_map:
-                    score_map[gid] = score_map[gid] + graph_boost / hop
-                else:
-                    score_map[gid] = min_seed_score * (graph_decay ** hop)
-                graph_ids.add(gid)
+        if graph_active:
+            preliminary = self._fuse(dense_legs, bm25_leg, {}, self._dense_weight, eff_bm25)
+            if preliminary:
+                seeds = _ranked_ids(preliminary)[:graph_seed_k]
+                expanded = await self._graph.expand(seed_ids=seeds, hops=graph_hops)
+                for gid, g_score in expanded:
+                    graph_leg[gid] = float(g_score)  # g_score = 1.0 / hop_distance
+                graph_ids = set(graph_leg)
 
+                new_ids = [gid for gid in graph_leg if gid not in dense_ids]
+                if new_ids:
+                    allowset = set(new_ids)
+                    for name in active_names:
+                        idx = self._indexes[name]
+                        query = np.asarray(query_vectors[name], dtype=np.float32)
+                        for hit in idx.search(query, k=len(new_ids), allowed_ids=new_ids):
+                            if hit.id not in allowset:
+                                continue  # backend ignored the allowlist — skip
+                            leg = dense_legs[name]
+                            if hit.id not in leg or hit.score > leg[hit.id]:
+                                leg[hit.id] = float(hit.score)
+                            dense_ids.add(hit.id)
+
+        # ── Step 6: final fusion ───────────────────────────────────────────
+        score_map = self._fuse(dense_legs, bm25_leg, graph_leg, self._dense_weight, eff_bm25)
         if not score_map:
             return []
 
-        # ── Step 6: sort candidates, take top k, hydrate from docstore ─────
-        top_ids = sorted(score_map, key=score_map.__getitem__, reverse=True)[:k]
+        # ── Step 7: take top k and hydrate from the docstore ───────────────
+        top_ids = _ranked_ids(score_map)[:k]
         chunk_records = await self._docstore.get_chunks(top_ids)
         chunk_map = {c.id: c for c in chunk_records}
 

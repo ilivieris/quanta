@@ -9,34 +9,24 @@ import pytest
 
 from quanta.exceptions import QuantaError
 from quanta.graph import NullGraph
-from quanta.retriever import MultiRetriever, _normalize
+from quanta.retriever import RRF_K, MultiRetriever, _ranked_ids
 from quanta.types import ChunkRecord, GraphNode, RetrievalResult, SearchResult
 
 DIM = 64  # small dim for test speed
 
 
-# ── _normalize helper ─────────────────────────────────────────────────────────
+# ── _ranked_ids helper ────────────────────────────────────────────────────────
 
-def test_normalize_empty():
-    assert _normalize([]) == []
-
-
-def test_normalize_single():
-    assert _normalize([0.5]) == [1.0]
+def test_ranked_ids_empty():
+    assert _ranked_ids({}) == []
 
 
-def test_normalize_equal_scores():
-    assert _normalize([0.3, 0.3, 0.3]) == [1.0, 1.0, 1.0]
+def test_ranked_ids_descending_by_score():
+    assert _ranked_ids({"a": 0.2, "b": 0.9, "c": 0.5}) == ["b", "c", "a"]
 
 
-def test_normalize_range():
-    result = _normalize([0.0, 0.5, 1.0])
-    assert result == pytest.approx([0.0, 0.5, 1.0])
-
-
-def test_normalize_arbitrary():
-    result = _normalize([2.0, 4.0, 6.0])
-    assert result == pytest.approx([0.0, 0.5, 1.0])
+def test_ranked_ids_ties_broken_by_id():
+    assert _ranked_ids({"b": 0.5, "a": 0.5}) == ["a", "b"]
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -314,3 +304,99 @@ def test_properties_accessible(mock_docstore, null_graph):
     assert retriever.docstore is mock_docstore
     assert retriever.graph is null_graph
     assert "text" in retriever.indexes
+
+
+# ── RRF fusion ────────────────────────────────────────────────────────────────
+
+async def test_rrf_score_depends_on_rank_not_raw_score(mock_docstore, null_graph, query_vec):
+    """A single dense leg yields exactly dense_weight / (rrf_k + rank)."""
+    idx = _make_index([SearchResult(id="ch-0", score=0.91), SearchResult(id="ch-1", score=0.02)])
+    mock_docstore.get_chunks = AsyncMock(
+        return_value=[_make_chunk("ch-0"), _make_chunk("ch-1")]
+    )
+
+    retriever = MultiRetriever(
+        indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
+    )
+    results = await retriever.search({"text": query_vec}, use_graph=False)
+
+    by_id = {r.id: r.score for r in results}
+    assert by_id["ch-0"] == pytest.approx(0.7 / (RRF_K + 1))
+    assert by_id["ch-1"] == pytest.approx(0.7 / (RRF_K + 2))
+
+
+async def test_rrf_invariant_to_raw_score_scale(mock_docstore, null_graph, query_vec):
+    """Rescaling every raw score leaves the fused ranking and scores unchanged."""
+    mock_docstore.get_chunks = AsyncMock(
+        return_value=[_make_chunk("a"), _make_chunk("b")]
+    )
+
+    async def _run(sa: float, sb: float):
+        idx = _make_index([SearchResult(id="a", score=sa), SearchResult(id="b", score=sb)])
+        retriever = MultiRetriever(
+            indexes={"text": idx}, docstore=mock_docstore, graph=null_graph
+        )
+        return await retriever.search({"text": query_vec}, use_graph=False)
+
+    tight = await _run(0.90, 0.89)   # nearly tied
+    spread = await _run(0.90, 0.01)  # far apart
+
+    assert [r.id for r in tight] == [r.id for r in spread]
+    assert [r.score for r in tight] == pytest.approx([r.score for r in spread])
+
+
+async def test_bad_rrf_k_raises(mock_docstore, null_graph):
+    idx = _make_index([])
+    with pytest.raises(QuantaError, match="rrf_k"):
+        MultiRetriever(
+            indexes={"text": idx}, docstore=mock_docstore, graph=null_graph, rrf_k=0
+        )
+
+
+# ── Graph as candidate expander ───────────────────────────────────────────────
+
+async def test_graph_weight_zero_gives_expanded_ids_no_score_of_their_own(
+    mock_docstore, query_vec
+):
+    """With graph_weight=0 an expanded id with no vector cannot surface."""
+    idx = MagicMock()
+    # allowlisted re-scoring finds nothing for the graph-only id
+    idx.search.side_effect = lambda q, k=10, allowed_ids=None: (
+        [] if allowed_ids else [SearchResult(id="dense-hit", score=0.9)]
+    )
+
+    mock_graph = MagicMock(spec=["expand", "navigate", "neighbors", "close"])
+    mock_graph.expand = AsyncMock(return_value=[("graph-only-id", 1.0)])
+    mock_docstore.get_chunks = AsyncMock(return_value=[_make_chunk("dense-hit")])
+
+    retriever = MultiRetriever(
+        indexes={"text": idx}, docstore=mock_docstore, graph=mock_graph, graph_weight=0.0
+    )
+    results = await retriever.search({"text": query_vec}, use_graph=True)
+
+    assert [r.id for r in results] == ["dense-hit"]
+
+
+async def test_graph_expansion_rescores_new_candidates_with_dense(mock_docstore, query_vec):
+    """An expanded id that *does* have a vector is re-scored and ranked on content."""
+    idx = MagicMock()
+    idx.search.side_effect = lambda q, k=10, allowed_ids=None: (
+        [SearchResult(id="graph-only-id", score=0.95)]
+        if allowed_ids
+        else [SearchResult(id="dense-hit", score=0.90)]
+    )
+
+    mock_graph = MagicMock(spec=["expand", "navigate", "neighbors", "close"])
+    mock_graph.expand = AsyncMock(return_value=[("graph-only-id", 1.0)])
+    mock_docstore.get_chunks = AsyncMock(
+        return_value=[_make_chunk("dense-hit"), _make_chunk("graph-only-id")]
+    )
+
+    retriever = MultiRetriever(
+        indexes={"text": idx}, docstore=mock_docstore, graph=mock_graph, graph_weight=0.0
+    )
+    results = await retriever.search({"text": query_vec}, use_graph=True)
+
+    # re-scored above the original dense hit purely on cosine, with no graph score
+    assert [r.id for r in results] == ["graph-only-id", "dense-hit"]
+    assert {r.id: r.source for r in results}["graph-only-id"] == "dense+graph"
