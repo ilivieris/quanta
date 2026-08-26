@@ -580,12 +580,22 @@ def run_doctor_expertise_match(
     k: int = 5,
     hospital_id: str | None = None,
 ) -> list[dict]:
-    """Finds the most suitable doctors for a condition using semantic similarity."""
+    """Finds the most suitable doctors for a condition using semantic similarity.
+
+    Hospital affiliation is *derived*, not stored: the schema has neither a
+    ``WORKS_AT`` relationship nor a ``Doctor.hospitalId`` property, so a doctor
+    is associated with the hospitals their patients have been admitted to, via
+    ``(:Doctor)<-[:TREATED_BY]-(:Patient)-[:ADMITTED_TO]->(:Hospital)``.  A
+    doctor may therefore be associated with several hospitals.
+    """
     allowed_ids: list[str] | None = None
     if hospital_id is not None:
         hospital_rows = graph.query(
-            "MATCH (d:Doctor)-[:WORKS_AT]->(h:Hospital {hospitalId: $hospital_id}) "
-            "RETURN d.doctorId AS did",
+            """
+            MATCH (d:Doctor)<-[:TREATED_BY]-(:Patient)
+                  -[:ADMITTED_TO]->(:Hospital {hospitalId: $hospital_id})
+            RETURN DISTINCT d.doctorId AS did
+            """,
             parameters={"hospital_id": hospital_id},
         ) or []
         if not hospital_rows:
@@ -597,23 +607,29 @@ def run_doctor_expertise_match(
     if not hits:
         return []
 
+    # Single batched enrichment instead of one round trip per hit.
+    enrich_rows = graph.query(
+        """
+        UNWIND $dids AS did
+        MATCH (d:Doctor {doctorId: did})
+        OPTIONAL MATCH (d)<-[:TREATED_BY]-(:Patient)-[:ADMITTED_TO]->(h:Hospital)
+        RETURN d.doctorId AS doctor_id, d.name AS name, d.specialty AS specialty,
+               d.yearsExp AS years_exp,
+               collect(DISTINCT h.name) AS hospitals
+        """,
+        parameters={"dids": [hit["id"] for hit in hits]},
+    ) or []
+    info_by_id = {row["doctor_id"]: row for row in enrich_rows}
+
     results = []
     for hit in hits:
-        enrich = graph.query(
-            """
-            MATCH (d:Doctor {doctorId: $did})
-            RETURN d.name AS name, d.specialty AS specialty,
-                   d.yearsExp AS years_exp, d.hospitals AS hospitals
-            """,
-            parameters={"did": hit["id"]},
-        ) or []
-        info = enrich[0] if enrich else {}
+        info = info_by_id.get(hit["id"], {})
         results.append({
             "doctor_id": hit["id"],
             "name":      info.get("name") or hit["display_name"],
             "specialty": info.get("specialty"),
             "years_exp": info.get("years_exp"),
-            "hospitals": info.get("hospitals") or [],
+            "affiliated_hospitals": info.get("hospitals") or [],
             "score":     hit["score"],
         })
     return results
@@ -931,8 +947,11 @@ TOOLS: list[dict] = [
             "description": (
                 "Finds the most suitable doctors for a clinical condition using "
                 "semantic similarity on Doctor.expertise. Each result includes "
-                "hospital_id — the hospital where the doctor works (there is no "
-                "WORKS_AT relationship; hospital affiliation is a Doctor property)."
+                "affiliated_hospitals — the hospitals this doctor's patients have "
+                "been admitted to. Affiliation is derived from the graph "
+                "((:Doctor)<-[:TREATED_BY]-(:Patient)-[:ADMITTED_TO]->(:Hospital)); "
+                "there is no WORKS_AT relationship and no Doctor.hospitalId property, "
+                "so a doctor may be associated with more than one hospital."
             ),
             "parameters": {
                 "type": "object",
@@ -948,7 +967,10 @@ TOOLS: list[dict] = [
                     },
                     "hospital_id": {
                         "type": "string",
-                        "description": "Optional hospital ID to restrict search to doctors who work at that hospital.",
+                        "description": (
+                            "Optional hospital ID restricting the search to doctors who "
+                            "treat patients admitted to that hospital."
+                        ),
                     },
                 },
                 "required": ["condition_description"],
