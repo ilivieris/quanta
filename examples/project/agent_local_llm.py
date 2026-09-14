@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import sys
 import time
 import uuid
 
@@ -579,6 +580,18 @@ def run_repl(agent: MedicalSearchAgent, conversation_id: str | None = None) -> N
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # On Windows, stdin/stdout attached to a non-native console (VS Code's
+    # integrated/debug terminal, a pipe, etc.) fall back to the system's
+    # legacy codepage (e.g. cp1252) instead of UTF-8. Typing Greek text then
+    # gets mis-decoded into lone surrogate characters that crash later when
+    # the request body is UTF-8 encoded for the LLM server. Force UTF-8 here
+    # so REPL input/output is decoded/encoded consistently regardless of how
+    # the process was launched.
+    if sys.platform == "win32":
+        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description="Medical Search Agent REPL (Local LLM)")
     parser.add_argument("--uri",             default="bolt://localhost:7687", help="Neo4j bolt URI")
     parser.add_argument("--user",            default="neo4j",                help="Neo4j username")
